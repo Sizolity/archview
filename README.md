@@ -63,3 +63,8 @@ gofmt -l .
 go vet ./...
 go test ./...
 ```
+
+## Roadmap
+
+Unimplemented features with acceptance criteria live in [ROADMAP.md](ROADMAP.md).
+
