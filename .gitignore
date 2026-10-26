@@ -1,0 +1,6 @@
+/archview
+/archview.exe
+*.test
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>archview · 架构浏览器</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #ffffff; --ink: #0f172a; --muted: #64748b;
+    --line: #e2e8f0; --accent: #2563eb; --soft: #eff6ff; --code: #f1f5f9;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header {
+    display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 18px;
+    background: var(--panel); border-bottom: 1px solid var(--line); position: relative; z-index: 3;
+  }
+  .brand { display: flex; align-items: baseline; gap: 7px; white-space: nowrap; }
+  .brand b { font-size: 15px; }
+  .brand span { color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+  #crumb { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; min-width: 0; }
+  #crumb b { color: var(--ink); font-weight: 600; }
+  #crumb .sep { color: #cbd5e1; }
+  .tools { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .tools input[type="search"] {
+    width: 240px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); font: inherit; color: inherit; outline: none;
+  }
+  .tools input[type="search"]:focus { border-color: var(--accent); background: #fff; }
+  .tools button {
+    padding: 6px 11px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); color: #334155; font: inherit; cursor: pointer;
+  }
+  .tools button:hover { border-color: #bfdbfe; background: var(--soft); }
+  .check { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  main { display: flex; height: calc(100vh - 56px); }
+  #canvas {
+    position: relative; flex: 1; min-width: 0; overflow: hidden;
+    background-color: var(--bg);
+    background-image: radial-gradient(#dbe3ec 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  #svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+  #svg.grabbing { cursor: grabbing; }
+  #hint {
+    position: absolute; left: 14px; bottom: 12px; color: #94a3b8; font-size: 11px;
+    background: rgba(255,255,255,.86); padding: 3px 8px; border-radius: 6px; pointer-events: none;
+  }
+  aside {
+    width: 390px; flex: none; overflow: auto; padding: 18px 20px 60px;
+    background: var(--panel); border-left: 1px solid var(--line);
+  }
+  aside h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.01em; }
+  aside h3 { margin: 22px 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .doc { color: #334155; margin: 10px 0 0; }
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; background: #e0e7ff; color: #3730a3; vertical-align: middle;
+  }
+  .badge.iface { background: #fef3c7; color: #b45309; }
+  .badge.type { background: #dcfce7; color: #166534; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--code); color: #334155; border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+  .pkg-list { list-style: none; margin: 10px 0 0; padding: 0; }
+  .pkg-list li { border-bottom: 1px solid var(--line); }
+  .pkg-list a { display: flex; justify-content: space-between; gap: 10px; padding: 9px 2px; color: var(--ink); }
+  .pkg-list a:hover { text-decoration: none; background: var(--soft); }
+  .pkg-list .count { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 12.5px; }
+  th { background: #f8fafc; color: var(--muted); font-weight: 600; font-size: 11px; }
+  tr:last-child td { border-bottom: 0; }
+  td.name { white-space: nowrap; font-weight: 600; }
+  code.sig { background: var(--code); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  .rel { display: grid; gap: 8px; }
+  .rel ul { margin: 0; padding-left: 18px; }
+  .rel li { margin: 2px 0; }
+  .empty { color: var(--muted); font-style: italic; }
+  .src {
+    display: inline-block; margin-top: 14px; padding: 7px 12px; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 13px;
+  }
+  .src:hover { text-decoration: none; filter: brightness(1.05); }
+  .err { color: #b91c1c; }
+  .node { cursor: pointer; }
+  .node text { pointer-events: none; user-select: none; }
+  .node .box { stroke-width: 1.5; }
+  .node .title { font-size: 13px; font-weight: 600; fill: #0f172a; }
+  .node .row { font-size: 11px; fill: #334155; font-family: ui-monospace, Consolas, monospace; }
+  .node .kind { font-size: 9px; fill: #64748b; }
+  .node:hover .box { stroke: #0284c7; }
+  .node.selected .box { stroke: #16a34a; stroke-width: 3; }
+  .edge { fill: none; stroke: #94a3b8; stroke-width: 1.4; }
+  .edge.ref { stroke: #8b5cf6; stroke-dasharray: 4 3; }
+  .badge-svg { font-size: 9px; fill: #475569; }
+  @media (max-width: 980px) {
+    aside { width: 330px; }
+    .tools input[type="search"] { width: 160px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b id="brand">archview</b><span>ARCHVIEW</span></div>
+  <nav id="crumb"></nav>
+  <div class="tools">
+    <input id="q" type="search" placeholder="搜索类型 / 函数…（/）" autocomplete="off">
+    <label class="check"><input id="all" type="checkbox"> 含未导出</label>
+    <button id="fit" type="button">适应</button>
+    <button id="reload" type="button">重载</button>
+    <span id="status"></span>
+  </div>
+</header>
+<main>
+  <section id="canvas">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="hint">拖拽平移 · 滚轮缩放 · 点击方框下钻</div>
+  </section>
+  <aside id="side"></aside>
+</main>
+<script>
+(function () {
+  "use strict";
+
+  var NS = "http://www.w3.org/2000/svg";
+  var svg = document.getElementById("svg");
+  var side = document.getElementById("side");
+  var crumb = document.getElementById("crumb");
+  var statusEl = document.getElementById("status");
+  var qEl = document.getElementById("q");
+  var allEl = document.getElementById("all");
+
+  var state = {
+    model: null, all: false, q: "", route: { view: "home" },
+    tx: 0, ty: 0, k: 1, sceneKey: "", scene: null
+  };
+
+  var idx = { pkgByPath: new Map(), typeById: new Map(), incoming: new Map() };
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function rel(p) {
+    if (!state.model) return p;
+    var pre = state.model.path + "/";
+    return p.indexOf(pre) === 0 ? p.slice(pre.length) : p;
+  }
+  function short(p) { return String(p).split("/").pop(); }
+  function vis(list) {
+    return (list || []).filter(function (x) { return state.all || x.exported; });
+  }
+  function el(name, attrs, text) {
+    var n = document.createElementNS(NS, name);
+    if (attrs) for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function cut(s, n) {
+    s = String(s == null ? "" : s);
+    return s.length <= n ? s : s.slice(0, n - 1) + "…";
+  }
+  function addIncoming(target, from, label) {
+    if (!idx.incoming.has(target)) idx.incoming.set(target, []);
+    var list = idx.incoming.get(target);
+    for (var i = 0; i < list.length; i++) if (list[i].from === from && list[i].label === label) return;
+    list.push({ from: from, label: label });
+  }
+
+  function indexModel() {
+    idx.pkgByPath.clear(); idx.typeById.clear(); idx.incoming.clear();
+    state.model.packages.forEach(function (p) {
+      p.types = p.types || []; p.funcs = p.funcs || [];
+      p.consts = p.consts || []; p.vars = p.vars || []; p.imports = p.imports || [];
+      idx.pkgByPath.set(p.path, p);
+      p.types.forEach(function (t) { t.pkg = p; idx.typeById.set(t.id, t); });
+    });
+    idx.typeById.forEach(function (t) {
+      (t.fields || []).forEach(function (f) { (f.refs || []).forEach(function (r) { addIncoming(r, t.id, "字段 " + f.name); }); });
+      (t.methods || []).forEach(function (m) { (m.refs || []).forEach(function (r) { addIncoming(r, t.id, "方法 " + m.name); }); });
+    });
+    state.model.packages.forEach(function (p) {
+      p.funcs.forEach(function (f) { (f.refs || []).forEach(function (r) { addIncoming(r, p.path, "函数 " + f.name); }); });
+    });
+  }
+
+  // ---------- model fetch ----------
+
+  async function fetchModel() {
+    statusEl.textContent = "扫描中…";
+    var r = await fetch("/model.json", { cache: "no-store" });
+    if (!r.ok) throw new Error(await r.text());
+    state.model = await r.json();
+    document.getElementById("brand").textContent = short(state.model.path);
+    indexModel();
+    updateStatus();
+  }
+
+  function updateStatus() {
+    if (!state.model) return;
+    var types = 0, funcs = 0;
+    state.model.packages.forEach(function (p) {
+      types += vis(p.types).length; funcs += vis(p.funcs).length;
+    });
+    statusEl.textContent = state.model.packages.length + " 包 · " + types + " 类型 · " + funcs + " 函数";
+  }
+
+  // ---------- routing ----------
+
+  function parseHash() {
+    var h = location.hash || "#/";
+    var parts = h.slice(2).split("/");
+    if (parts[0] === "pkg" && parts[1]) return { view: "pkg", path: decodeURIComponent(parts.slice(1).join("/")) };
+    if (parts[0] === "type" && parts[1]) return { view: "type", id: decodeURIComponent(parts.slice(1).join("/")) };
+    return { view: "home" };
+  }
+  function go(hash) {
+    if (location.hash === hash) render();
+    else location.hash = hash;
+  }
+  function pkgHash(path) { return "#/pkg/" + encodeURIComponent(path); }
+  function typeHash(id) { return "#/type/" + encodeURIComponent(id); }
+
+  // ---------- scene ----------
+
+  function buildScene() {
+    var route = state.route;
+    if (route.view === "home" || styleHome(route)) {
+      var pkgs = state.model.packages.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
+      var nodes = layoutPackages(pkgs);
+      var edges = [];
+      pkgs.forEach(function (p) {
+        p.imports.forEach(function (imp) {
+          if (idx.pkgByPath.has(imp)) edges.push({ from: imp, to: p.path, ref: false });
+        });
+      });
+      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs };
+    }
+
+    var pkg;
+    if (route.view === "type") {
+      var selectedType = idx.typeById.get(route.id);
+      pkg = selectedType ? selectedType.pkg : null;
+    } else {
+      pkg = idx.pkgByPath.get(route.path);
+    }
+    if (!pkg) return null;
+    var types = vis(pkg.types);
+    if (route.view === "type") {
+      var selected = idx.typeById.get(route.id);
+      if (selected && types.indexOf(selected) < 0) types.push(selected);
+    }
+    var tnodes = layoutTypes(pkg, types);
+    var byId = new Map();
+    tnodes.forEach(function (n) { byId.set(n.id, n); });
+    var tedges = [];
+    var seen = {};
+    tnodes.forEach(function (n) {
+      var t = idx.typeById.get(n.id);
+      if (!t) return;
+      (t.fields || []).forEach(function (f) {
+        (f.refs || []).forEach(function (r) {
+          if (r === n.id || !byId.has(r)) return;
+          var k = n.id + ">" + r;
+          if (seen[k]) return;
+          seen[k] = true;
+          tedges.push({ from: n.id, to: r, ref: true });
+        });
+      });
+    });
+    return {
+      kind: "types", key: "pkg:" + pkg.path, nodes: tnodes, edges: tedges,
+      pkg: pkg, selected: route.view === "type" ? route.id : null
+    };
+  }
+
+  function styleHome(route) {
+    return route.view === "pkg" && !idx.pkgByPath.has(route.path);
+  }
+
+  function layoutPackages(pkgs) {
+    var depth = new Map();
+    pkgs.forEach(function (p) { depth.set(p.path, 0); });
+    for (var round = 0; round < pkgs.length; round++) {
+      pkgs.forEach(function (p) {
+        p.imports.forEach(function (imp) {
+          var q = idx.pkgByPath.get(imp);
+          if (!q) return;
+          var d = Math.max(depth.get(p.path), depth.get(q.path) + 1);
+          depth.set(p.path, d);
+        });
+      });
+    }
+    var cols = new Map();
+    pkgs.forEach(function (p) {
+      var d = depth.get(p.path);
+      if (!cols.has(d)) cols.set(d, []);
+      cols.get(d).push(p);
+    });
+    var nodes = [];
+    cols.forEach(function (list, d) {
+      list.sort(function (a, b) { return a.path.localeCompare(b.path); });
+      list.forEach(function (p, i) {
+        nodes.push({
+          id: p.path,
+          kind: "pkg",
+          x: 40 + d * 320,
+          y: 40 + i * 96,
+          w: 240,
+          h: 68,
+          title: short(p.path),
+          sub: rel(p.path),
+          lines: [vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数"],
+          href: pkgHash(p.path),
+          selected: false
+        });
+      });
+    });
+    return nodes;
+  }
+
+  function typeRows(t) {
+    var rows = [];
+    vis(t.fields).forEach(function (f) {
+      rows.push((f.exported ? "+ " : "- ") + (f.embedded ? f.type : f.name + ": " + f.type));
+    });
+    vis(t.methods).forEach(function (m) {
+      rows.push((m.exported ? "+ " : "- ") + m.name + m.sig);
+    });
+    return rows;
+  }
+
+  function layoutTypes(pkg, types) {
+    var nodes = [];
+    var w = 290, cols = 3;
+    var ys = [40, 40, 40];
+    types.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).forEach(function (t, i) {
+      var rows = typeRows(t);
+      var shown = rows.slice(0, 7);
+      var more = rows.length - shown.length;
+      var h = 30 + Math.max(1, shown.length) * 17 + (more > 0 ? 17 : 0) + 12;
+      var c = i % cols;
+      nodes.push({
+        id: t.id,
+        kind: "type",
+        x: 40 + c * (w + 40),
+        y: ys[c],
+        w: w,
+        h: h,
+        title: t.name,
+        rows: shown,
+        more: more,
+        sub: t.kind + " · " + t.pkg.name,
+        href: typeHash(t.id),
+        selected: state.route.view === "type" && state.route.id === t.id
+      });
+      ys[c] += h + 26;
+    });
+    return nodes;
+  }
+
+  // ---------- drawing ----------
+
+  function draw(scene) {
+    svg.innerHTML = "";
+    var defs = el("defs");
+    var marker = el("marker", {
+      id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5",
+      markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse"
+    });
+    marker.appendChild(el("path", { d: "M0,0 L10,5 L0,10 z", fill: "#94a3b8" }));
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+
+    var world = el("g", { id: "world" });
+    svg.appendChild(world);
+
+    var byId = new Map();
+    scene.nodes.forEach(function (n) { byId.set(n.id, n); });
+
+    scene.edges.forEach(function (e) {
+      var a = byId.get(e.from), b = byId.get(e.to);
+      if (!a || !b) return;
+      var p = el("path", { d: edgePath(a, b), class: "edge" + (e.ref ? " ref" : "") });
+      world.appendChild(p);
+    });
+
+    scene.nodes.forEach(function (n) {
+      var g = el("g", { class: "node" + (n.selected ? " selected" : ""), "data-id": n.id });
+      var fill = n.kind === "pkg" ? "#e0e7ff" : (n.sub === "interface" ? "#fef3c7" : "#dbeafe");
+      var stroke = n.kind === "pkg" ? "#6366f1" : (n.sub === "interface" ? "#d97706" : "#3b82f6");
+      g.appendChild(el("rect", {
+        x: n.x, y: n.y, width: n.w, height: n.h, rx: 9,
+        fill: fill, stroke: stroke, class: "box"
+      }));
+      var title = el("text", { x: n.x + 12, y: n.y + 20, class: "title" }, cut(n.title, 26));
+      g.appendChild(title);
+      if (n.kind === "type") {
+        g.appendChild(el("text", { x: n.x + 12, y: n.y + 34, class: "kind" }, n.sub));
+      } else {
+        g.appendChild(el("text", { x: n.x + 12, y: n.y + 36, class: "kind" }, cut(n.sub, 40)));
+      }
+      if (n.lines) {
+        n.lines.forEach(function (line, i) {
+          g.appendChild(el("text", { x: n.x + 12, y: n.y + 54 + i * 16, class: "row" }, cut(line, 40)));
+        });
+      }
+      if (n.rows) {
+        var base = n.kind === "type" ? 34 : 54;
+        n.rows.forEach(function (row, i) {
+          g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + i * 17, class: "row" }, cut(row, 42)));
+        });
+        if (n.more > 0) {
+          g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind" }, "… 还有 " + n.more + " 条"));
+        }
+      }
+      g.addEventListener("click", function (ev) { ev.stopPropagation(); go(n.href); });
+      world.appendChild(g);
+    });
+
+    applyTransform();
+  }
+
+  function edgePath(a, b) {
+    var x1 = a.x + a.w, y1 = a.y + a.h / 2;
+    var x2 = b.x, y2 = b.y + b.h / 2;
+    if (x2 <= x1) {
+      var dx = Math.max(70, Math.abs(x1 - x2) / 2);
+      return "M" + x1 + "," + y1 + " C" + (x1 + dx) + "," + y1 + " " + (x2 - dx) + "," + y2 + " " + x2 + "," + y2;
+    }
+    var mx = (x1 + x2) / 2;
+    return "M" + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2;
+  }
+
+  function applyTransform() {
+    var world = svg.querySelector("#world");
+    if (world) world.setAttribute("transform", "translate(" + state.tx + " " + state.ty + ") scale(" + state.k + ")");
+  }
+
+  function fit(scene) {
+    if (!scene || !scene.nodes.length) {
+      state.tx = 0; state.ty = 0; state.k = 1; applyTransform(); return;
+    }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    scene.nodes.forEach(function (n) {
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
+    });
+    var pad = 50;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    var bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+    var W = svg.clientWidth || 1000, H = svg.clientHeight || 700;
+    var k = Math.min(1.25, Math.max(0.2, Math.min((W - 60) / bw, (H - 60) / bh)));
+    state.k = k;
+    state.tx = (W - bw * k) / 2 - minX * k;
+    state.ty = (H - bh * k) / 2 - minY * k;
+    applyTransform();
+  }
+
+  // ---------- inspector ----------
+
+  function sourceHref(pos) {
+    var i = String(pos || "").lastIndexOf(":");
+    if (i < 0) return "";
+    var p = pos.slice(0, i), line = pos.slice(i + 1);
+    return "/source?path=" + encodeURIComponent(p) + "#L" + encodeURIComponent(line);
+  }
+
+  function typeLink(id, label) {
+    var t = idx.typeById.get(id);
+    if (!t) return "<code>" + esc(label || id) + "</code>";
+    return '<a href="' + typeHash(id) + '">' + esc(label || (t.pkg.name + "." + t.name)) + "</a>";
+  }
+
+  function renderCrumb() {
+    var r = state.route;
+    if (r.view === "home") { crumb.innerHTML = "<b>模块总览</b>"; return; }
+    var pkg = r.view === "pkg" ? idx.pkgByPath.get(r.path) : (idx.typeById.get(r.id) || {}).pkg;
+    if (!pkg) { crumb.innerHTML = '<a href="#/">模块总览</a>'; return; }
+    var html = '<a href="#/">模块总览</a><span class="sep">/</span>';
+    if (r.view === "type") {
+      html += '<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + '</a><span class="sep">/</span><b>' + esc(short(r.id.split("#").pop())) + "</b>";
+    } else {
+      html += "<b>" + esc(rel(pkg.path)) + "</b>";
+    }
+    crumb.innerHTML = html;
+  }
+
+  function renderSide(scene) {
+    if (state.q) { renderSearch(); return; }
+    var r = state.route;
+    if (r.view === "home" || !scene) { renderHome(); return; }
+    if (r.view === "pkg" && scene.pkg) { renderPkg(scene.pkg); return; }
+    var t = idx.typeById.get(r.id);
+    if (!t) { renderHome(); return; }
+    renderType(t);
+  }
+
+  function renderHome() {
+    var html = "<h2>模块总览</h2>";
+    html += '<div class="meta">' + state.model.packages.length + " 个包 · 点击方框进入模块</div>";
+    html += '<ul class="pkg-list">';
+    state.model.packages.forEach(function (p) {
+      html += "<li><a href=\"" + pkgHash(p.path) + "\"><span>" + esc(rel(p.path)) + "</span>" +
+        '<span class="count">' + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数</span></a></li>";
+    });
+    html += "</ul>";
+    html += '<h3>说明</h3><p class="doc">图中每个方框是一个模块，箭头表示依赖方向；点击进入后显示该模块的类型卡片，字段与方法的类型可以继续点击。</p>';
+    side.innerHTML = html;
+  }
+
+  function renderPkg(p) {
+    var html = "<h2>" + esc(rel(p.path)) + "</h2>";
+    html += '<div class="meta">' + esc(p.name) + " · " + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数</div>";
+    if (p.doc) html += '<p class="doc">' + esc(p.doc) + "</p>";
+    if (p.imports.length) {
+      html += "<h3>依赖</h3><div class=\"chips\">";
+      p.imports.forEach(function (i) { html += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>"; });
+      html += "</div>";
+    }
+    html += "<h3>类型</h3>";
+    var types = vis(p.types);
+    if (!types.length) html += '<p class="empty">没有导出类型</p>';
+    else {
+      html += "<table><thead><tr><th>类型</th><th>成员</th></tr></thead><tbody>";
+      types.forEach(function (t) {
+        html += '<tr><td class="name"><a href="' + typeHash(t.id) + '">' + esc(t.name) + "</a> <span class=\"badge " +
+          (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></td><td>" +
+          vis(t.fields).length + " 字段 · " + vis(t.methods).length + " 方法</td></tr>";
+      });
+      html += "</tbody></table>";
+    }
+    var funcs = vis(p.funcs);
+    html += "<h3>函数</h3>";
+    if (!funcs.length) html += '<p class="empty">没有导出函数</p>';
+    else {
+      html += "<table><thead><tr><th>函数</th><th>签名</th></tr></thead><tbody>";
+      funcs.forEach(function (f) {
+        html += '<tr><td class="name">' + esc(f.name) + '</td><td><code class="sig">' + esc(f.sig) + "</code></td></tr>";
+      });
+      html += "</tbody></table>";
+    }
+    side.innerHTML = html;
+  }
+
+  function renderType(t) {
+    var html = "<h2>" + esc(t.name) + ' <span class="badge ' +
+      (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></h2>";
+    html += '<div class="meta">' + esc(rel(t.pkg.path)) + " · " + esc(t.pos) + "</div>";
+    if (t.doc) html += '<p class="doc">' + esc(t.doc) + "</p>";
+
+    var fields = vis(t.fields), methods = vis(t.methods);
+    html += "<h3>字段</h3>";
+    if (!fields.length) html += '<p class="empty">没有字段</p>';
+    else {
+      html += "<table><thead><tr><th>字段</th><th>类型</th></tr></thead><tbody>";
+      fields.forEach(function (f) {
+        var typ = (f.refs && f.refs.length) ? f.refs.map(function (r) { return typeLink(r); }).join(" / ") : '<code class="sig">' + esc(f.type) + "</code>";
+        html += '<tr><td class="name">' + (f.embedded ? "«嵌入»" : esc(f.name)) + "</td><td>" + typ + "</td></tr>";
+      });
+      html += "</tbody></table>";
+    }
+
+    html += "<h3>方法</h3>";
+    if (!methods.length) html += '<p class="empty">没有方法</p>';
+    else {
+      html += "<table><thead><tr><th>方法</th><th>签名</th></tr></thead><tbody>";
+      methods.forEach(function (m) {
+        html += '<tr><td class="name">' + esc(m.name) + '</td><td><code class="sig">' + esc(m.sig) + "</code></td></tr>";
+      });
+      html += "</tbody></table>";
+    }
+
+    var out = [];
+    fields.forEach(function (f) { (f.refs || []).forEach(function (r) { out.push({ id: r, label: "字段 " + f.name }); }); });
+    methods.forEach(function (m) { (m.refs || []).forEach(function (r) { out.push({ id: r, label: "方法 " + m.name }); }); });
+    var seen = {};
+    out = out.filter(function (o) { if (seen[o.id]) return false; seen[o.id] = true; return true; });
+    var inc = idx.incoming.get(t.id) || [];
+
+    html += "<h3>关系</h3><div class=\"rel\">";
+    html += "<div><b>引用</b>" + (out.length ? "<ul>" + out.map(function (o) {
+      return "<li>" + esc(o.label) + " → " + typeLink(o.id) + "</li>";
+    }).join("") + "</ul>" : '<p class="empty">没有引用模块内类型</p>') + "</div>";
+    html += "<div><b>被引用</b>" + (inc.length ? "<ul>" + inc.map(function (o) {
+      var from = idx.typeById.has(o.from) ? typeLink(o.from) : '<a href="' + pkgHash(o.from) + '">' + esc(rel(o.from)) + "</a>";
+      return "<li>" + from + " · " + esc(o.label) + "</li>";
+    }).join("") + "</ul>" : '<p class="empty">没有其他类型或函数引用它</p>') + "</div>";
+    html += "</div>";
+
+    var href = sourceHref(t.pos);
+    if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
+    side.innerHTML = html;
+  }
+
+  function renderSearch() {
+    if (!state.model) return;
+    var needle = state.q.toLowerCase();
+    var hits = [];
+    idx.typeById.forEach(function (t) {
+      if (!state.all && !t.exported) return;
+      var hay = [t.name, t.doc, (t.fields || []).map(function (f) { return f.name + " " + f.type; }).join(" ")].join(" ").toLowerCase();
+      if (hay.indexOf(needle) >= 0) {
+        hits.push({ kind: "类型", name: t.pkg.name + "." + t.name, href: typeHash(t.id), doc: t.doc });
+      }
+    });
+    state.model.packages.forEach(function (p) {
+      p.funcs.forEach(function (f) {
+        if (!state.all && !f.exported) return;
+        if ((f.name + " " + f.doc).toLowerCase().indexOf(needle) >= 0) {
+          hits.push({ kind: "函数", name: p.name + "." + f.name, href: pkgHash(p.path), doc: f.doc });
+        }
+      });
+    });
+    var html = "<h2>搜索</h2><div class=\"meta\">“" + esc(state.q) + "” · " + hits.length + " 个结果</div>";
+    if (!hits.length) html += '<p class="empty">没有匹配</p>';
+    else {
+      html += "<table><thead><tr><th>类型</th><th>名字</th></tr></thead><tbody>";
+      hits.slice(0, 80).forEach(function (h) {
+        html += "<tr><td>" + esc(h.kind) + '</td><td class="name"><a href="' + h.href + '">' + esc(h.name) + "</a></td></tr>";
+      });
+      html += "</tbody></table>";
+    }
+    side.innerHTML = html;
+  }
+
+  // ---------- render loop ----------
+
+  function render() {
+    if (!state.model) return;
+    state.route = parseHash();
+    renderCrumb();
+    var scene = buildScene();
+    if (!scene) {
+      go("#/");
+      return;
+    }
+    state.scene = scene;
+    draw(scene);
+    renderSide(scene);
+    if (state.sceneKey !== scene.key) {
+      state.sceneKey = scene.key;
+      fit(scene);
+    }
+  }
+
+  // ---------- input ----------
+
+  var drag = null;
+  svg.addEventListener("mousedown", function (e) {
+    if (e.target.closest(".node")) return;
+    drag = { x: e.clientX, y: e.clientY, tx: state.tx, ty: state.ty };
+    svg.classList.add("grabbing");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", function (e) {
+    if (!drag) return;
+    state.tx = drag.tx + (e.clientX - drag.x);
+    state.ty = drag.ty + (e.clientY - drag.y);
+    applyTransform();
+  });
+  window.addEventListener("mouseup", function () {
+    if (!drag) return;
+    drag = null;
+    svg.classList.remove("grabbing");
+  });
+  svg.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var rect = svg.getBoundingClientRect();
+    var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    var factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    var k2 = Math.min(3, Math.max(0.2, state.k * factor));
+    state.tx = mx - (mx - state.tx) * (k2 / state.k);
+    state.ty = my - (my - state.ty) * (k2 / state.k);
+    state.k = k2;
+    applyTransform();
+  }, { passive: false });
+
+  document.getElementById("fit").addEventListener("click", function () { fit(state.scene); });
+  document.getElementById("reload").addEventListener("click", function () { boot(); });
+  allEl.addEventListener("change", function () {
+    state.all = allEl.checked;
+    updateStatus();
+    state.sceneKey = "";
+    render();
+  });
+  qEl.addEventListener("input", function () {
+    state.q = qEl.value.trim();
+    if (!state.model) return;
+    if (state.q) renderSearch();
+    else renderSide(state.scene);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "/" && document.activeElement !== qEl) { e.preventDefault(); qEl.focus(); }
+    if (e.key === "Escape" && document.activeElement === qEl) {
+      qEl.value = ""; state.q = ""; qEl.blur(); renderSide(state.scene);
+    }
+  });
+  window.addEventListener("hashchange", function () {
+    qEl.value = ""; state.q = "";
+    render();
+  });
+  window.addEventListener("resize", function () { fit(state.scene); });
+
+  // ---------- boot ----------
+
+  async function boot() {
+    try {
+      await fetchModel();
+      state.sceneKey = "";
+      render();
+    } catch (e) {
+      statusEl.textContent = "扫描失败";
+      side.innerHTML = '<p class="err">' + esc(e.message) + "</p>";
+    }
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
