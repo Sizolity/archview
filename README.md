@@ -12,7 +12,7 @@ module.
 Build once and run the binary from the module you want to inspect:
 
 ```sh
-go build -o archview .
+go build -o archview ./cmd/archview
 
 cd /path/to/your/project
 /path/to/archview            # http://127.0.0.1:8788
@@ -199,7 +199,7 @@ fatal. An imported model has no source directory, so `/source` returns 404 and
 The UI colours a type by the worst CRAP score among its methods: ≤5 green,
 ≤30 amber, above 30 red — go-crap's default threshold is 30.
 
-Edges come from `go list -export` plus `go/types` (`types.go`); the browser
+Edges come from `go list -export` plus `go/types` (`internal/model/types.go`); the browser
 draws `uses` today and the `implements`/`embeds` edges are waiting for the
 layered layout in the roadmap.
 
@@ -226,6 +226,20 @@ layered layout in the roadmap.
   writes to the project it inspects — the only file it writes is the `-out`
   page you name.
 
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| `cmd/archview` | flags, wiring, exit codes |
+| `internal/model` | scan + type check + relations + call graph + workspaces |
+| `internal/crap` | go-crap collection and score mapping |
+| `internal/config` | `archview.json` |
+| `internal/cache` | fingerprint cache and the `-watch` broadcaster |
+| `internal/export` | single-file page, uml-viewer IR in and out |
+| `internal/web` | HTTP surface and the source page |
+| `internal/assets` | `ui.html`, `ui.js`, `source.css` (embedded) |
+| `internal/model/testdata` | fixture modules used by the tests |
+
 ## Development
 
 ```sh
@@ -235,10 +249,11 @@ go test ./...
 node --test
 ```
 
-`ui.html` holds the page and the DOM code; `ui.js` holds everything that can
-run without a document — routing, layout, scene building, formatting — so the
-layout can be tested (`ui.test.js`) instead of eyeballed. `node --test` needs
-no npm install; the tests import `ui.js` directly.
+`internal/assets/ui.html` holds the page and the DOM code;
+`internal/assets/ui.js` holds everything that can run without a document —
+routing, layout, scene building, formatting — so the layout can be tested
+(`ui.test.js`) instead of eyeballed. `node --test` needs no npm install; the
+tests import `ui.js` directly.
 
 CI runs those four commands plus `go build ./...` on `ubuntu-latest` and
 `windows-latest` (`.github/workflows/ci.yml`).
@@ -248,12 +263,12 @@ CI runs those four commands plus `go build ./...` on `ubuntu-latest` and
 A plain `go build` reports `dev`. Releases inject the version at link time:
 
 ```sh
-go build -ldflags "-X main.version=1.2.3" -o archview .
+go build -ldflags "-X main.version=1.2.3" -o archview ./cmd/archview
 ./archview -version        # archview 1.2.3
 ```
 
 `.goreleaser.yaml` builds static binaries for linux/darwin/windows on
-amd64/arm64 with that same flag; `go install github.com/Sizolity/archview@latest`
+amd64/arm64 with that same flag; `go install github.com/Sizolity/archview/cmd/archview@latest`
 works once the module is published.
 
 ## Design

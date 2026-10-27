@@ -37,15 +37,15 @@ change (drill-down, layout mode, focus, search) is client-side.
 
 | Stage | File | Notes |
 | --- | --- | --- |
-| module discovery | `model.go` | `go list -m` for the module path and root; it is the only way to learn where the module starts, and it works on Windows and Linux |
-| package list | `model.go` | `go list -e ./...` keeps broken packages so the rest of the scan still works |
-| parsing | `model.go` | `go/parser` with comments; unexported declarations are kept and filtered in the UI |
-| type check | `types.go` | `go list -e -export -deps` for export data, `importer.ForCompiler` + `types.Config.Check`; a failure is per-package warning, never fatal |
-| relations | `types.go` | `uses` is syntactic; `implements`/`embeds` come from `go/types` (a type counts if `T` or `*T` satisfies the interface) |
-| calls | `calls.go` | only static targets inside the module; interface calls are marked `dynamic` |
-| metrics | `metrics.go` | one `go-crap scan -f json .` at startup, keyed to functions by `file:line` |
-| workspace | `workspace.go` | `go work edit -json` lists modules; results are merged and positions re-rooted |
-| cache | `cache.go` | fingerprint of every `.go` + `go.mod`/`go.sum`/`go.work` (path, size, mtime) decides whether to rescan |
+| module discovery | `internal/model` | `go list -m` for the module path and root; it is the only way to learn where the module starts, and it works on Windows and Linux |
+| package list | `internal/model` | `go list -e ./...` keeps broken packages so the rest of the scan still works |
+| parsing | `internal/model` | `go/parser` with comments; unexported declarations are kept and filtered in the UI |
+| type check | `internal/model` | `go list -e -export -deps` for export data, `importer.ForCompiler` + `types.Config.Check`; a failure is per-package warning, never fatal |
+| relations | `internal/model` | `uses` is syntactic; `implements`/`embeds` come from `go/types` (a type counts if `T` or `*T` satisfies the interface) |
+| calls | `internal/model` | only static targets inside the module; interface calls are marked `dynamic` |
+| metrics | `internal/crap` | one `go-crap scan -f json .` at startup, keyed to functions by `file:line` |
+| workspace | `internal/model` | `go work edit -json` lists modules; results are merged and positions re-rooted |
+| cache | `internal/cache` | fingerprint of every `.go` + `go.mod`/`go.sum`/`go.work` (path, size, mtime) decides whether to rescan |
 
 ## Model schema
 

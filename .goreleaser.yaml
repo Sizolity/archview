@@ -4,7 +4,8 @@
 version: 2
 
 builds:
-  - env:
+  - main: ./cmd/archview
+    env:
       - CGO_ENABLED=0
     goos:
       - linux

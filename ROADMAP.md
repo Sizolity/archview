@@ -12,31 +12,23 @@
 方法、常量/变量与引用,提供模块图下钻、类型卡片、inspector、搜索、源码行查看、
 平移缩放。
 
-| 文件 | 职责 |
+| 位置 | 职责 |
 | --- | --- |
-| `model.go` | `go list` + `go/parser` 抽取模型;`load`、`parsePackage`、`resolve`/`resolveSig` |
-| `types.go` | `go list -export` + `go/types` 类型检查;产出 `implements`/`embeds` 边与 `warnings` |
-| `calls.go` | 遍历函数体建调用图:模块内、接口调用标 `dynamic` |
-| `metrics.go` | 调 go-crap 取 CRAP/复杂度/覆盖率,按 `file:line` 对齐到函数与方法 |
-| `config.go` | `archview.json`:exclude/editor/layers/metrics,一次性报全的错误校验 |
-| `cache.go` | 模型缓存:按 `.go`/`go.mod` 的路径+mtime+size 指纹决定是否重扫 |
-| `watch.go` | `-watch`:轮询指纹,变化后通过 SSE 通知页面重载 |
-| `workspace.go` | `-dir` 与 `go.work`:逐模块扫描后合并成一份模型 |
-| `edn.go` | 导出 uml-viewer 拓扑 IR |
-| `ednimport.go` | 最小 EDN reader + IR → 模型(导入) |
-| `server.go` | `/`、`/ui.js`、`/model.json`、`/source`、`/healthz` |
-| `ui.js` | 纯前端逻辑:路由、布局、场景构建、几何、格式化(`node --test` 覆盖) |
-| `ui.html` | 页面、样式、SVG 绘制、inspector 与事件 |
-| `main.go` | `-addr`、`-editor`、`-out`、优雅关闭 |
-| `export.go` | 单文件导出:内联模型与 `ui.js` |
-| `*_test.go` | 模型解析、关系解析、导出与 HTTP 路由测试;`testdata/` 下是 fixture 模块 |
-| `ui.test.js` | `ui.js` 的 `node --test` 用例 |
+| `cmd/archview` | 入口:flags、装配、退出码 |
+| `internal/model` | `go list` + `go/parser` 抽取模型;`go/types` 类型检查与关系;调用图;工作区合并 |
+| `internal/crap` | 调 go-crap 取 CRAP/复杂度/覆盖率,按 `file:line` 对齐到函数与方法 |
+| `internal/config` | `archview.json`:exclude/editor/layers/metrics,一次性报全的错误校验 |
+| `internal/cache` | 模型缓存(指纹)与 `-watch` 的 SSE 广播 |
+| `internal/export` | 单文件页面、uml-viewer IR 的导出与导入 |
+| `internal/web` | `/`、`/ui.js`、`/model.json`、`/source`、`/events`、`/healthz`、源码页渲染 |
+| `internal/assets` | `ui.html`、`ui.js`、`source.css`(embed) |
+| `internal/model/testdata` | fixture 模块:`relmod`、`broken`、`exclude`、`calls`、`work` |
 
 已知边界:
 
 - `uses` 关系是**语法级**的:字段与签名里的类型按名字匹配;
 - `implements`/`embeds` 来自 `go/types`(指针接收者的方法也算满足接口),但泛型实例仍未建模;
-- UI 还没画 `implements`/`embeds` 边,等 3.1 分层布局一起接入;模型里已经有了;
+- UI 把 `implements`/`embeds` 画成绿/蓝实线,调用是青色(接口调用虚线);
 - `/model.json` 有内存缓存,但**没有 watch**:改代码后要手动刷新页面(缓存会让刷新变快);
 - CRAP 指标在启动时采集一次(go-crap 会跑一遍 `go test`),改代码后刷新页面不会重算;
 - 调用图只到模块内,图上聚合到类型级,函数级一跳看 inspector;
@@ -68,7 +60,7 @@
 
 模型现在带 `edges`(排序后的 `{kind, from, to}`,`from`/`to` 是 `<import path>#<TypeName>`)
 与 `warnings`;`implements`/`embeds` 由 `go/types` 解析,`uses` 保留语法匹配作为兜底。
-实现见 `types.go`,验收 fixture 见 `testdata/relmod`(值/指针接收者、跨包实现、
+实现见 `internal/model/types.go`,验收 fixture 见 `internal/model/testdata/relmod`(值/指针接收者、跨包实现、
 嵌入提升)与 `testdata/broken`(类型检查失败的降级)。
 
 实现时的取舍,后续条目要知道:
@@ -146,7 +138,7 @@ archview 只做取数、映射与着色,**不新增 Go 依赖**:go-crap 是外�
 导出 `-edn out.edn` 与导入 `-import-edn view.edn` 都做了。schema 来自
 [uml-viewer](https://github.com/unclebob/uml-viewer) 的 README(`## IR` 一节),不是猜的。
 
-导出(`edn.go`):
+导出(`internal/export/edn.go`):
 
 - `:title` / `:direction :tb` / `:packages` / `:classes` / `:fields` / `:ops` / `:edges`;
 - 关系映射:`uses` → `:association`、`implements` → `:implements`、
@@ -155,7 +147,7 @@ archview 只做取数、映射与着色,**不新增 Go 依赖**:go-crap 是外�
 - 有指标时给类写 `:crap`(方法均值)与 `:coverage`(0–1,uml-viewer 的口径);
 - 签名拆成 `:args` / `:returns`(`splitSig`,嵌套括号不误切)。
 
-导入(`ednimport.go`):
+导入(`internal/export/ednimport.go`):
 
 - 自写最小 EDN reader:map/vector/list/keyword/string/number/bool/nil、`;` 注释、
   逗号当空白;坏输入报"第 N 行";
