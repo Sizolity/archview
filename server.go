@@ -102,6 +102,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) source(w http.ResponseWriter, r *http.Request) {
+	if s.Root == "" {
+		// An imported IR has no module behind it.
+		http.Error(w, "导入的模型没有源码目录", http.StatusNotFound)
+		return
+	}
 	requested := r.URL.Query().Get("path")
 	if requested == "" {
 		http.Error(w, "缺少 path", http.StatusBadRequest)

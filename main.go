@@ -34,6 +34,7 @@ func main() {
 	editor := flag.String("editor", "source", "源码跳转方式: source|vscode|goland|file|none")
 	out := flag.String("out", "", "把自包含页面写到该文件后退出(单文件导出)")
 	ednOut := flag.String("edn", "", "把 uml-viewer 拓扑 IR 写到该文件后退出")
+	importPath := flag.String("import-edn", "", "读取 uml-viewer IR 并直接渲染(不扫描代码)")
 	crapCmd := flag.String("crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
 	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
 	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+defaultConfigFile+")")
@@ -76,7 +77,7 @@ func main() {
 	defer stop()
 
 	metrics := &metricsBundle{Thresholds: cfg.Metrics.Thresholds}
-	if !noMetrics {
+	if !noMetrics && *importPath == "" {
 		started := time.Now()
 		metrics = collectMetrics(ctx, *dir, *crapCmd)
 		metrics.Thresholds = cfg.Metrics.Thresholds
@@ -99,14 +100,38 @@ func main() {
 		metrics.apply(m)
 		return m, nil
 	}
-	cache := newModelCache(*dir, loadFn)
 
-	m, err := cache.Load(ctx)
-	if err != nil {
-		logger.Error("扫描模块失败", "err", err)
-		os.Exit(1)
+	var m *Module
+	var cache *modelCache
+	var load func(context.Context) (*Module, error)
+	if *importPath != "" {
+		// An imported IR replaces the scan entirely: there is no module to read.
+		data, err := os.ReadFile(*importPath)
+		if err != nil {
+			logger.Error("读取 EDN 失败", "path", *importPath, "err", err)
+			os.Exit(1)
+		}
+		imported, ignored, err := importEDN(data)
+		if err != nil {
+			logger.Error("EDN 无法解析", "path", *importPath, "err", err)
+			os.Exit(1)
+		}
+		imported.Editor = mode
+		m = imported
+		load = func(context.Context) (*Module, error) { return imported, nil }
+		logger.Info("已导入 EDN", "path", *importPath, "packages", len(m.Packages),
+			"edges", len(m.Edges), "ignored", ignored)
+	} else {
+		cache = newModelCache(*dir, loadFn)
+		var err error
+		m, err = cache.Load(ctx)
+		if err != nil {
+			logger.Error("扫描模块失败", "err", err)
+			os.Exit(1)
+		}
+		load = cache.Load
+		logger.Info("索引完成", "packages", len(m.Packages), "root", m.Root, "layers", len(cfg.Layers))
 	}
-	logger.Info("索引完成", "packages", len(m.Packages), "root", m.Root, "layers", len(cfg.Layers))
 
 	if *out != "" || *ednOut != "" {
 		if *out != "" {
@@ -135,10 +160,13 @@ func main() {
 		return
 	}
 
-	srv := &Server{Root: m.Root, UI: uiHTML, JS: uiJS, Load: cache.Load}
-	if *watch {
+	srv := &Server{Root: m.Root, UI: uiHTML, JS: uiJS, Load: load}
+	if *watch && cache != nil {
 		srv.Watch = newWatcher()
 		go watchLoop(ctx, cache, srv.Watch, 500*time.Millisecond)
+	}
+	if *watch && cache == nil {
+		logger.Warn("-watch 对导入的 EDN 无效,已忽略")
 	}
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),

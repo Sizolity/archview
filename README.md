@@ -38,6 +38,7 @@ explicitly change it.
 | `-editor` | `source` | where "查看源码" jumps: `source`, `vscode`, `goland`, `file`, `none` |
 | `-out` | | write a self-contained page to this file and exit |
 | `-edn` | | write the uml-viewer topology IR to this file and exit |
+| `-import-edn` | | render an IR instead of scanning code |
 | `-crap-cmd` | `go-crap` | command that produces the CRAP report |
 | `-no-crap` | `false` | skip CRAP metrics entirely |
 | `-config` | `archview.json` | config file to read |
@@ -112,8 +113,20 @@ reads: `:packages` of `:classes` with `:fields` and `:ops`, plus `:edges`.
 Relations map to the IR's edge kinds — `uses` → `:association`, `implements` →
 `:implements`, `embeds` → `:aggregation` — and class ids are stable slugs
 (`wiki.Page` → `:wiki-page`). When CRAP was collected, each class also carries
-`:crap` (the mean of its methods) and `:coverage` as a 0–1 ratio. Importing an
-existing IR is not implemented.
+`:crap` (the mean of its methods) and `:coverage` as a 0–1 ratio.
+
+The other direction reads an IR back:
+
+```sh
+archview -import-edn view.edn          # serve it
+archview -import-edn view.edn -out page.html
+```
+
+Packages become `Package`s, `:interface` classes become interfaces, `:fields`
+and `:ops` become members, and `:edges` map back to `uses`/`implements`/
+`embeds`. Unknown kinds and dangling endpoints are counted and reported, not
+fatal. An imported model has no source directory, so `/source` returns 404 and
+`-watch` has nothing to poll.
 
 ## What it shows
 

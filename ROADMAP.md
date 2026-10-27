@@ -22,6 +22,8 @@
 | `cache.go` | 模型缓存:按 `.go`/`go.mod` 的路径+mtime+size 指纹决定是否重扫 |
 | `watch.go` | `-watch`:轮询指纹,变化后通过 SSE 通知页面重载 |
 | `workspace.go` | `-dir` 与 `go.work`:逐模块扫描后合并成一份模型 |
+| `edn.go` | 导出 uml-viewer 拓扑 IR |
+| `ednimport.go` | 最小 EDN reader + IR → 模型(导入) |
 | `server.go` | `/`、`/ui.js`、`/model.json`、`/source`、`/healthz` |
 | `ui.js` | 纯前端逻辑:路由、布局、场景构建、几何、格式化(`node --test` 覆盖) |
 | `ui.html` | 页面、样式、SVG 绘制、inspector 与事件 |
@@ -58,7 +60,7 @@
 `2.3` → `4.3`→`3.4`→`3.2`→`3.1`→`2.2` → `4.5`→`4.4`→`2.4`→`5.3`。
 理由:`2.2` 要 `2.1` 的 `types.Info`,`3.1` 要 `2.1` 的 `embeds`/`implements` 边,
 `3.4` 要 `4.3` 的 `layers` 配置,`4.1` 与 `4.2` 改同一处取数/链接代码。
-已完成:`2.1`、`2.2`、`2.3`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.4`、`4.5`、`5.1`、`5.2`;部分:`2.4`(只有导出)、`5.3`(版本/发布配置/设计文档)。
+已完成:`2.1`、`2.2`、`2.3`、`2.4`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.4`、`4.5`、`5.1`、`5.2`;部分:`5.3`(版本/发布配置/设计文档)。
 
 ## 2. 数据与关系
 
@@ -139,26 +141,36 @@ archview 只做取数、映射与着色,**不新增 Go 依赖**:go-crap 是外�
 - go-crap 不在 `PATH`:服务仍启动,`/model.json` 200,`warnings` 有记录(单测覆盖);
 - 不写目标仓库:报告走 stdout,`git status` 干净。
 
-### 2.4 EDN 兼容(P2) — 部分完成 2026-10-27
+### 2.4 EDN 兼容(P2) — 已完成 2026-10-27
 
-**导出 `-edn out.edn`** 已完成,输出 [uml-viewer](https://github.com/unclebob/uml-viewer)
-的静态拓扑 IR。schema 来自它的 README(`## IR` 一节),不是猜的:
+导出 `-edn out.edn` 与导入 `-import-edn view.edn` 都做了。schema 来自
+[uml-viewer](https://github.com/unclebob/uml-viewer) 的 README(`## IR` 一节),不是猜的。
+
+导出(`edn.go`):
 
 - `:title` / `:direction :tb` / `:packages` / `:classes` / `:fields` / `:ops` / `:edges`;
 - 关系映射:`uses` → `:association`、`implements` → `:implements`、
   `embeds` → `:aggregation`;调用图在该 IR 里没有对应 kind,不导出;
 - id 是稳定 slug(`internal/wiki` 的 `Page` → `:wiki-page`),重名自动加 `-2`;
 - 有指标时给类写 `:crap`(方法均值)与 `:coverage`(0–1,uml-viewer 的口径);
-- 签名拆成 `:args` / `:returns`(`splitSig`,嵌套括号不误切);
-- 字符串按 EDN 规则转义。
+- 签名拆成 `:args` / `:returns`(`splitSig`,嵌套括号不误切)。
 
-导入(`-import-edn`)未做:要自写最小 EDN reader,等有真实需求再开工。
+导入(`ednimport.go`):
 
-验收状态:
+- 自写最小 EDN reader:map/vector/list/keyword/string/number/bool/nil、`;` 注释、
+  逗号当空白;坏输入报"第 N 行";
+- IR → 模型:包 → `Package`,`:interface` → interface(其余 struct),`:fields`/`:ops` →
+  字段与方法,`Sig` 由 args/returns 拼回;
+- 边反向映射回 `uses`/`implements`/`embeds`;未知 kind 与悬空端点计入 `ignored` 并打日志;
+- 导入的模型没有源码目录,`/source` 直接 404;`-watch` 对导入无效(启动时提示)。
 
-- [ ] 导出的 EDN 能被 uml-viewer 打开 —— 需要本机有 Clojure/JVM,当前环境没有,未实测;
-- [ ] 导入后再导出结构等价 —— 导入未做;
-- [x] 结构按官方 schema 写,并有单测(id 唯一、边类型、转义、指标、签名拆分)。
+验收核对:
+
+- [x] 导出的结构符合官方 schema(单测断言 id、边类型、转义、指标);
+- [x] 导入后再导出**结构等价**:类型名、方法签名、各 kind 的边数一致,且第二次往返
+      逐字节不动点;
+- [x] 未知 key 与坏的边被计数,不 panic;
+- [ ] 用真 uml-viewer 打开 —— 本机没有 Clojure/JVM,按约定不做。
 
 ## 3. 渲染与交互
 

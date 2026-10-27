@@ -635,7 +635,7 @@
         });
       }
       applyMoved(nodes, view.moved);
-      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs };
+      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: "h" };
     }
 
     var pkg;
@@ -714,7 +714,10 @@
       nodes: tnodes,
       edges: tedges,
       pkg: pkg,
-      selected: route.view === "type" ? route.id : null
+      selected: route.view === "type" ? route.id : null,
+      // One flow per view: the layered layout reads top to bottom, the grid
+      // reads left to right.
+      axis: layoutMode(view.layout) === "kind" ? "h" : "v"
     };
     if (view.declutter) scene = declutterScene(scene, scene.selected);
     if (view.focus) scene = focusScene(scene, view.focus);
@@ -724,28 +727,30 @@
 
   // ---------- geometry ----------
 
-  // edgePath routes along the axis with the larger gap: the layered layout
-  // stacks dependencies below their users, so most edges leave the bottom and
-  // enter the top. Same band (or grid) falls back to a horizontal route. The
-  // path always ends at the target, so one arrow marker is enough.
-  function edgePath(a, b) {
-    var acx = a.x + a.w / 2, acy = a.y + a.h / 2;
-    var bcx = b.x + b.w / 2, bcy = b.y + b.h / 2;
-    var dx = bcx - acx, dy = bcy - acy;
-
-    if (Math.abs(dy) >= Math.abs(dx)) {
-      var down = dy >= 0;
-      var y1 = down ? a.y + a.h : a.y;
-      var y2 = down ? b.y : b.y + b.h;
-      var my = (y1 + y2) / 2;
-      return "M" + acx + "," + y1 + " C" + acx + "," + my + " " + bcx + "," + my + " " + bcx + "," + y2;
+  // edgePath routes along the one axis the view was laid out on, so a diagram
+  // reads as a single flow instead of a mix of directions:
+  //
+  //   "v" — top to bottom (layered layout: users above, dependencies below)
+  //   "h" — left to right (grid layout, and the package columns)
+  //
+  // The path always ends on the target, so one arrow marker does the job.
+  function edgePath(a, b, axis) {
+    if (axis === "h") {
+      var right = b.x + b.w / 2 >= a.x + a.w / 2;
+      var hx1 = right ? a.x + a.w : a.x;
+      var hx2 = right ? b.x : b.x + b.w;
+      var hy1 = a.y + a.h / 2;
+      var hy2 = b.y + b.h / 2;
+      var hmx = (hx1 + hx2) / 2;
+      return "M" + hx1 + "," + hy1 + " C" + hmx + "," + hy1 + " " + hmx + "," + hy2 + " " + hx2 + "," + hy2;
     }
-
-    var right = dx >= 0;
-    var x1 = right ? a.x + a.w : a.x;
-    var x2 = right ? b.x : b.x + b.w;
-    var mx = (x1 + x2) / 2;
-    return "M" + x1 + "," + acy + " C" + mx + "," + acy + " " + mx + "," + bcy + " " + x2 + "," + bcy;
+    var down = b.y + b.h / 2 >= a.y + a.h / 2;
+    var vy1 = down ? a.y + a.h : a.y;
+    var vy2 = down ? b.y : b.y + b.h;
+    var vx1 = a.x + a.w / 2;
+    var vx2 = b.x + b.w / 2;
+    var vmy = (vy1 + vy2) / 2;
+    return "M" + vx1 + "," + vy1 + " C" + vx1 + "," + vmy + " " + vx2 + "," + vmy + " " + vx2 + "," + vy2;
   }
 
   // applyMoved drops the positions a user dragged onto the freshly laid out

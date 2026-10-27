@@ -332,7 +332,7 @@
       var a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) return;
       var p = el("path", {
-        d: A.edgePath(a, b),
+        d: A.edgePath(a, b, scene.axis),
         class: edgeClass(e),
         "marker-end": "url(#" + markerFor(e) + ")"
       });

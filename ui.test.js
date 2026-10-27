@@ -230,13 +230,27 @@ test("buildScene falls back to the home view for an unknown package", () => {
   assert.equal(ui.buildScene(model, idx, { view: "type", id: "nope" }, false), null);
 });
 
-test("edgePath returns a cubic path without NaN", () => {
-  const forward = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 100, w: 100, h: 50 });
-  assert.match(forward, /^M100,25 C/);
-  assert.equal(forward.includes("NaN"), false);
+test("edgePath never emits NaN, whichever axis or order", () => {
+  const a = { x: 0, y: 0, w: 100, h: 50 };
+  const b = { x: 300, y: 100, w: 100, h: 50 };
+  for (const axis of ["v", "h"]) {
+    for (const [from, to] of [[a, b], [b, a]]) {
+      const d = ui.edgePath(from, to, axis);
+      assert.match(d, /^M/, axis);
+      assert.equal(d.includes("NaN"), false, axis);
+    }
+  }
+});
 
-  const backward = ui.edgePath({ x: 300, y: 0, w: 100, h: 50 }, { x: 0, y: 0, w: 100, h: 50 });
-  assert.equal(backward.includes("NaN"), false);
+test("buildScene gives each view a single flow axis", () => {
+  const model = fixture();
+  const idx = ui.indexModel(model);
+  const home = ui.buildScene(model, idx, { view: "home" }, false);
+  assert.equal(home.axis, "h", "package columns flow left to right");
+  const layered = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+  assert.equal(layered.axis, "v", "the layered type layout flows top to bottom");
+  const grid = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false, { layout: "kind" });
+  assert.equal(grid.axis, "h", "the kind grid flows left to right");
 });
 
 test("fitTransform keeps the zoom in range and centres the scene", () => {
@@ -838,14 +852,14 @@ test("searchHits breaks name ties alphabetically", () => {
 // ---------- edges: routing, styles, dragging ----------
 
 test("edgePath routes vertically when the target sits below", () => {
-  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 150, y: 300, w: 100, h: 50 });
+  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 150, y: 300, w: 100, h: 50 }, "v");
   // Leaves the bottom centre (50,50) and enters the top centre (200,300).
   assert.match(d, /^M50,50 C/);
   assert.match(d, / 200,300$/);
 });
 
 test("edgePath routes horizontally when the target sits beside", () => {
-  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 20, w: 100, h: 50 });
+  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 20, w: 100, h: 50 }, "h");
   assert.match(d, /^M100,25 C/);
   assert.match(d, / 300,45$/);
 });
@@ -855,8 +869,8 @@ test("edgePath points the same way whatever the order", () => {
   const b = { x: 300, y: 300, w: 100, h: 50 };
   // Reversing the pair must produce the reverse path, so the arrow always ends
   // on the target and the line never doubles back on itself.
-  const forward = ui.edgePath(a, b);
-  const backward = ui.edgePath(b, a);
+  const forward = ui.edgePath(a, b, "v");
+  const backward = ui.edgePath(b, a, "v");
   assert.match(forward, /^M50,50 /);
   assert.match(backward, /^M350,300 /);
   assert.match(backward, / 50,50$/);
@@ -909,3 +923,5 @@ test("implements edges to a hidden package are not drawn", () => {
   const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
   assert.equal(scene.edges.filter((e) => e.kind).length, 0);
 });
+
+
