@@ -4,14 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// stripTags removes markup so a highlighted page can be compared with the
+// plain text it came from.
+func stripTags(s string) string {
+	return html.UnescapeString(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(s, ""))
+}
 
 func TestServerRoutes(t *testing.T) {
 	root := t.TempDir()
@@ -76,7 +84,7 @@ func TestServerRoutes(t *testing.T) {
 	}
 
 	code, body = get("/source?path=a.go")
-	if code != http.StatusOK || !strings.Contains(body, "package a") || !strings.Contains(body, `id="L1"`) {
+	if code != http.StatusOK || !strings.Contains(stripTags(body), "package a") || !strings.Contains(body, `id="L1"`) {
 		t.Fatalf("GET /source = %d %q", code, body)
 	}
 	// It renders as a fenced code block: a framed card with a title bar, a
@@ -87,6 +95,12 @@ func TestServerRoutes(t *testing.T) {
 	// The file has four lines; a trailing newline is not a fifth.
 	if !strings.Contains(body, "4 行") {
 		t.Fatalf("line count missing or wrong: %q", body)
+	}
+	// Go is highlighted, so keywords and comments stand out from the text.
+	for _, want := range []string{`class="kw">package`, `class="kw">struct`, `class="com">// A is a type.`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("highlighting missing %q: %q", want, body)
+		}
 	}
 
 	for _, path := range []string{"/source", "/source?path=../secret.go", "/source?path=README.md"} {

@@ -5,11 +5,9 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"html"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -148,35 +146,3 @@ func (s *Server) source(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(renderSource(filepath.ToSlash(clean), data))
 }
-
-// renderSource renders a file the way a fenced code block looks in Markdown:
-// a light card with a title bar (file, language, line count), a scrollable
-// monospace body and a line-number gutter that stays out of the copied text.
-func renderSource(path string, data []byte) []byte {
-	lines := strings.Split(string(data), "\n")
-	if n := len(lines); n > 0 && lines[n-1] == "" {
-		lines = lines[:n-1] // a trailing newline is not an extra line
-	}
-
-	var b strings.Builder
-	b.WriteString("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">")
-	b.WriteString("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
-	b.WriteString("<title>" + html.EscapeString(path) + "</title><style>")
-	b.WriteString(string(sourceCSS))
-	b.WriteString("</style></head><body><main class=\"page\">")
-	b.WriteString("<nav class=\"bar\"><a class=\"back\" href=\"/\" onclick=\"history.back();return false\">← 返回</a>")
-	b.WriteString("<span class=\"path\">" + html.EscapeString(path) + "</span></nav>")
-	b.WriteString("<section class=\"block\"><div class=\"head\"><span class=\"file\">" + html.EscapeString(path) + "</span>")
-	b.WriteString("<span class=\"lang\">go</span><span class=\"count\">" + strconv.Itoa(len(lines)) + " 行</span></div>")
-	b.WriteString("<pre class=\"code\">")
-	for i, line := range lines {
-		n := i + 1
-		fmt.Fprintf(&b, "<span class=\"ln\" id=\"L%d\"><a class=\"no\" href=\"#L%d\">%d</a>%s</span>",
-			n, n, n, html.EscapeString(line))
-	}
-	b.WriteString("</pre></section></main></body></html>")
-	return []byte(b.String())
-}
-
-//go:embed source.css
-var sourceCSS []byte

@@ -46,6 +46,12 @@ body {
 .ln:hover { background: #f6f8fa; }
 .ln:target { background: #fff8c5; box-shadow: inset 3px 0 0 #d4a72c; }
 
+/* Go syntax colours, GitHub light palette. */
+.kw { color: #cf222e; }
+.str { color: #0a3069; }
+.com { color: #6e7781; font-style: italic; }
+.num { color: #0550ae; }
+
 .no {
   display: inline-block; width: 4ch; padding-right: 16px;
   text-align: right; color: #94a3b8; text-decoration: none; user-select: none;

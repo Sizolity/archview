@@ -138,9 +138,9 @@ fatal. An imported model has no source directory, so `/source` returns 404 and
   card, `+` exported and `-` unexported.
 - **Inspector**: package docs, type docs, fields, methods, outgoing references
   and "used by", plus a link to the exact source line.
-- **Source view**: the file with line numbers; `#L35` anchors jump to the
-  declaration. `-editor` sends the link to VS Code, GoLand, `file://` or
-  nowhere instead.
+- **Source view**: the file as a framed code block with Go highlighting and a
+  line-number gutter; `#L35` anchors jump to the declaration. `-editor` sends
+  the link to VS Code, GoLand, `file://` or nowhere instead.
 - **Search** across type, method, function, constant and variable names, plus
   docs and signatures; hits are highlighted, `↑`/`↓`/`Enter` picks one, and
   the canvas fades everything that does not match. An **include unexported**
