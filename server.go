@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -147,29 +148,55 @@ func (s *Server) source(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(renderSource(filepath.ToSlash(clean), data))
 }
 
+// renderSource renders a file the way a fenced code block looks in Markdown:
+// a light card with a title bar (file, language, line count), a scrollable
+// monospace body and a line-number gutter that stays out of the copied text.
 func renderSource(path string, data []byte) []byte {
 	lines := strings.Split(string(data), "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1] // a trailing newline is not an extra line
+	}
+
 	var b strings.Builder
 	b.WriteString("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">")
 	b.WriteString("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
 	b.WriteString("<title>" + html.EscapeString(path) + "</title><style>")
-	b.WriteString(`body{margin:0;background:#0f172a;color:#e2e8f0;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}
-header{position:sticky;top:0;display:flex;gap:16px;align-items:center;padding:10px 18px;background:#111827;border-bottom:1px solid #1f2937;font-family:system-ui,sans-serif}
-header a{color:#93c5fd;text-decoration:none}header a:hover{text-decoration:underline}
-header .path{color:#cbd5e1;font-family:ui-monospace,Consolas,monospace}
-pre{margin:0;padding:14px 0 60px;overflow:auto}
-.ln{display:block;padding:0 18px;white-space:pre}
-.ln:target{background:#1e3a8a;box-shadow:inset 3px 0 0 #60a5fa}
-.no{display:inline-block;width:5ch;color:#64748b;text-decoration:none;user-select:none}
-.ln:target .no{color:#bfdbfe}
-`)
-	b.WriteString("</style></head><body><header><a href=\"/\" onclick=\"history.back();return false\">返回</a>")
-	b.WriteString("<span class=\"path\">" + html.EscapeString(path) + "</span></header><pre>")
+	b.WriteString(sourceCSS)
+	b.WriteString("</style></head><body><main class=\"page\">")
+	b.WriteString("<nav class=\"bar\"><a class=\"back\" href=\"/\" onclick=\"history.back();return false\">← 返回</a>")
+	b.WriteString("<span class=\"path\">" + html.EscapeString(path) + "</span></nav>")
+	b.WriteString("<section class=\"block\"><div class=\"head\"><span class=\"file\">" + html.EscapeString(path) + "</span>")
+	b.WriteString("<span class=\"lang\">go</span><span class=\"count\">" + strconv.Itoa(len(lines)) + " 行</span></div>")
+	b.WriteString("<pre class=\"code\">")
 	for i, line := range lines {
 		n := i + 1
-		fmt.Fprintf(&b, "<span class=\"ln\" id=\"L%d\"><a class=\"no\" href=\"#L%d\">%d</a>%s</span>\n",
+		fmt.Fprintf(&b, "<span class=\"ln\" id=\"L%d\"><a class=\"no\" href=\"#L%d\">%d</a>%s</span>",
 			n, n, n, html.EscapeString(line))
 	}
-	b.WriteString("</pre></body></html>")
+	b.WriteString("</pre></section></main></body></html>")
 	return []byte(b.String())
 }
+
+// sourceCSS is the code-block look: light, framed, one gutter column.
+const sourceCSS = `*{box-sizing:border-box}
+body{margin:0;background:#f8fafc;color:#0f172a;font:14px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.page{max-width:1280px;margin:0 auto;padding:20px 20px 60px}
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;color:#64748b}
+.bar .back{color:#2563eb;text-decoration:none}
+.bar .back:hover{text-decoration:underline}
+.bar .path{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#334155}
+.block{border:1px solid #e2e8f0;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.05)}
+.head{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;font-size:12px;color:#475569}
+.head .file{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.head .lang{border:1px solid #e2e8f0;border-radius:999px;padding:0 8px;font-size:11px;color:#64748b}
+.head .count{margin-left:auto;color:#94a3b8}
+.code{margin:0;padding:12px 0;overflow:auto;background:#fff;tab-size:4;
+  font:12.5px/1.65 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace}
+.ln{display:block;width:max-content;min-width:100%;padding-right:20px;white-space:pre}
+.ln:hover{background:#f6f8fa}
+.ln:target{background:#fff8c5;box-shadow:inset 3px 0 0 #d4a72c}
+.no{display:inline-block;width:4ch;padding-right:16px;text-align:right;color:#94a3b8;text-decoration:none;user-select:none}
+.ln:hover .no{color:#475569}
+.ln:target .no{color:#b45309}
+@media (max-width:640px){.page{padding:10px}.no{width:3ch;padding-right:10px}}
+`

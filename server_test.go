@@ -79,6 +79,15 @@ func TestServerRoutes(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "package a") || !strings.Contains(body, `id="L1"`) {
 		t.Fatalf("GET /source = %d %q", code, body)
 	}
+	// It renders as a fenced code block: a framed card with a title bar, a
+	// language tag and a line count, and one gutter number per line.
+	if !strings.Contains(body, `class="block"`) || !strings.Contains(body, `class="lang">go`) {
+		t.Fatalf("source page is not a code block: %q", body)
+	}
+	// The file has four lines; a trailing newline is not a fifth.
+	if !strings.Contains(body, "4 行") {
+		t.Fatalf("line count missing or wrong: %q", body)
+	}
 
 	for _, path := range []string{"/source", "/source?path=../secret.go", "/source?path=README.md"} {
 		if code, _ := get(path); code != http.StatusBadRequest {
