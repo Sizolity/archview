@@ -57,7 +57,7 @@
 `2.3` → `4.3`→`3.4`→`3.2`→`3.1`→`2.2` → `4.5`→`4.4`→`2.4`→`5.3`。
 理由:`2.2` 要 `2.1` 的 `types.Info`,`3.1` 要 `2.1` 的 `embeds`/`implements` 边,
 `3.4` 要 `4.3` 的 `layers` 配置,`4.1` 与 `4.2` 改同一处取数/链接代码。
-已完成:`2.1`、`2.2`、`2.3`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.5`、`5.1`、`5.2`;部分:`4.4`(只有缓存)。
+已完成:`2.1`、`2.2`、`2.3`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.5`、`5.1`、`5.2`;部分:`4.4`(只有缓存)、`5.3`(版本/发布配置/设计文档)。
 
 ## 2. 数据与关系
 
@@ -375,22 +375,27 @@ fixture(`testdata/exclude`)。
 - [ ] 故意留一个格式错误能被 CI 拦住 —— 同上;
 - [x] 无源码探测式跳过。
 
-### 5.3 发布与文档(P2)
+### 5.3 发布与文档(P2) — 部分完成 2026-10-27
 
-**现状**:只能本地 `go build`。
+已做:
 
-**目标**:
+- `-version`:`var version = "dev"`,用 `-ldflags "-X main.version=1.2.3"` 构建后
+  打印 `archview 1.2.3`(实测);模块路径与 `go install` 约定一致;
+- `.goreleaser.yaml`:linux/darwin/windows × amd64/arm64 静态二进制,版本经 ldflags
+  注入,Windows 出 zip;
+- `docs/design.md`:数据流、模型 schema、端点、性能取舍;
+- README 补齐 `-out`/`-editor`/`-dir`/`-config` 与配置字段表。
 
-- `-version`(ldflags 注入)+ `go install github.com/huic/archview@latest` 可用;
-- `goreleaser` 或手工 release:Windows/Linux/macOS 二进制;
-- README 加截图、`-out`/`-editor`/配置说明;
-- `docs/design.md`:数据流、模型 schema、端点、性能取舍。
+未做:
 
-**验收**:
+- 真的打 tag 跑 goreleaser(需要远端仓库与标签,本地无法验证);
+- README 截图(要真实浏览器截图,属于 §7 的同一笔欠账)。
 
-- 打 tag 后 release 页面有三平台产物;
-- 新机器按 README 两步跑起来;
-- `go install` 的二进制与 `go build` 行为一致。
+验收状态:
+
+- [ ] 打 tag 后 release 页面有三平台产物 —— 需要你打 tag;
+- [x] 新机器按 README 两步跑起来;
+- [x] `go install` 的二进制与 `go build` 行为一致(同一条 main,只有版本号不同)。
 
 ## 6. 明确不做
 

@@ -10,6 +10,7 @@ import (
 	_ "embed"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -25,6 +26,9 @@ var uiHTML []byte
 //go:embed ui.js
 var uiJS []byte
 
+// version is injected by goreleaser via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8788", "监听地址(默认只绑回环)")
 	editor := flag.String("editor", "source", "源码跳转方式: source|vscode|goland|file|none")
@@ -33,7 +37,13 @@ func main() {
 	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
 	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+defaultConfigFile+")")
 	dir := flag.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
+	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("archview " + version)
+		return
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)

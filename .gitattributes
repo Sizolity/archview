@@ -5,3 +5,4 @@
 *.sum text eol=lf
 *.js text eol=lf
 *.yml text eol=lf
+*.yaml text eol=lf

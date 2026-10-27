@@ -1,0 +1,36 @@
+# goreleaser: `goreleaser release --clean` on a tag builds one static
+# executable per platform with no runtime dependencies, and injects the version
+# that `archview -version` prints.
+version: 2
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - ROADMAP.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+
+release:
+  draft: false
+  prerelease: auto

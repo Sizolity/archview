@@ -41,6 +41,7 @@ explicitly change it.
 | `-no-crap` | `false` | skip CRAP metrics entirely |
 | `-config` | `archview.json` | config file to read |
 | `-dir` | `.` | directory to scan; a `go.work` in it means every module is scanned |
+| `-version` | | print the build's version and exit |
 
 `-dir` points the scan somewhere else. If that directory holds a `go.work`, every
 module it lists is scanned and merged into one model: package paths stay unique
@@ -208,6 +209,24 @@ no npm install; the tests import `ui.js` directly.
 
 CI runs those four commands plus `go build ./...` on `ubuntu-latest` and
 `windows-latest` (`.github/workflows/ci.yml`).
+
+## Version
+
+A plain `go build` reports `dev`. Releases inject the version at link time:
+
+```sh
+go build -ldflags "-X main.version=1.2.3" -o archview .
+./archview -version        # archview 1.2.3
+```
+
+`.goreleaser.yaml` builds static binaries for linux/darwin/windows on
+amd64/arm64 with that same flag; `go install github.com/huic/archview@latest`
+works once the module is published.
+
+## Design
+
+How a scan becomes a page, the model schema and the trade-offs:
+[docs/design.md](docs/design.md).
 
 ## Roadmap
 
