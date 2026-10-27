@@ -82,7 +82,7 @@ func treeFingerprint(dir string) (string, error) {
 			return nil
 		}
 		name := d.Name()
-		if name != "go.mod" && name != "go.sum" && !strings.HasSuffix(name, ".go") {
+		if name != "go.mod" && name != "go.sum" && name != "go.work" && !strings.HasSuffix(name, ".go") {
 			return nil
 		}
 		info, err := d.Info()

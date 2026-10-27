@@ -18,9 +18,10 @@ type Call struct {
 }
 
 // collectCalls walks every function body of the packages that type-checked and
-// records calls that stay inside the module. Calls into the standard library
-// or a dependency are dropped: they have no node in this view.
-func collectCalls(checked map[string]*checkedPackage) []Call {
+// records calls whose target scope accepts the callee's package path. Calls
+// into the standard library or a dependency are dropped: they have no node in
+// this view.
+func collectCalls(checked map[string]*checkedPackage, scope func(pkgPath string) bool) []Call {
 	var calls []Call
 	for path, cp := range checked {
 		for _, file := range cp.files {
@@ -39,16 +40,27 @@ func collectCalls(checked map[string]*checkedPackage) []Call {
 						return true
 					}
 					to, dynamic, ok := calleeID(cp.info, call)
-					if !ok || !moduleFunc(to, checked) {
+					if !ok {
 						return true
 					}
-					calls = append(calls, Call{From: from, To: to, Dynamic: dynamic})
+					if pkgPath, ok := funcIDPackage(to); ok && scope(pkgPath) {
+						calls = append(calls, Call{From: from, To: to, Dynamic: dynamic})
+					}
 					return true
 				})
 			}
 		}
 	}
 	return normalizeCalls(calls)
+}
+
+// funcIDPackage is the package half of a function ID.
+func funcIDPackage(id string) (string, bool) {
+	i := strings.LastIndex(id, "#")
+	if i <= 0 {
+		return "", false
+	}
+	return id[:i], true
 }
 
 // declFuncID is the model ID of the function being walked.
@@ -113,17 +125,6 @@ func funcObjectID(fn *gotypes.Func) (string, bool) {
 	}
 	_, isIface := named.Underlying().(*gotypes.Interface)
 	return pkgPath + "#" + named.Obj().Name() + "." + fn.Name(), isIface
-}
-
-// moduleFunc reports whether an ID points at a package that type-checked, i.e.
-// something the browser can show.
-func moduleFunc(id string, checked map[string]*checkedPackage) bool {
-	i := strings.LastIndex(id, "#")
-	if i <= 0 {
-		return false
-	}
-	_, ok := checked[id[:i]]
-	return ok
 }
 
 // normalizeCalls drops duplicates and sorts, so the JSON is diffable.

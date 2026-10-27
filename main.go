@@ -32,6 +32,7 @@ func main() {
 	crapCmd := flag.String("crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
 	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
 	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+defaultConfigFile+")")
+	dir := flag.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -65,7 +66,7 @@ func main() {
 	metrics := &metricsBundle{Thresholds: cfg.Metrics.Thresholds}
 	if !noMetrics {
 		started := time.Now()
-		metrics = collectMetrics(ctx, "", *crapCmd)
+		metrics = collectMetrics(ctx, *dir, *crapCmd)
 		metrics.Thresholds = cfg.Metrics.Thresholds
 		if len(metrics.Warnings) > 0 {
 			logger.Warn("CRAP 指标不可用,页面不显示分数", "reason", metrics.Warnings[0])
@@ -86,7 +87,7 @@ func main() {
 		metrics.apply(m)
 		return m, nil
 	}
-	cache := newModelCache("", loadFn)
+	cache := newModelCache(*dir, loadFn)
 
 	m, err := cache.Load(ctx)
 	if err != nil {

@@ -115,8 +115,19 @@ func Load(ctx context.Context) (*Module, error) { return loadWith(ctx, "", nil) 
 // Tests point it at a fixture so they never depend on where go test runs.
 func load(ctx context.Context, dir string) (*Module, error) { return loadWith(ctx, dir, nil) }
 
-// loadWith scans dir with the config's excludes and layers applied.
+// loadWith scans dir with the config's excludes and layers applied. A go.work
+// in dir turns the scan into a workspace scan.
 func loadWith(ctx context.Context, dir string, cfg *Config) (*Module, error) {
+	if hasGoWork(dir) {
+		return loadWorkspace(ctx, dir, cfg)
+	}
+	return loadModule(ctx, dir, cfg, nil)
+}
+
+// loadModule scans one module rooted at dir. scope decides which package paths
+// a call may target; nil means "this module only". A workspace passes a
+// permissive scope while loading, then filters with the union of its modules.
+func loadModule(ctx context.Context, dir string, cfg *Config, scope func(string) bool) (*Module, error) {
 	modulePath, root, err := moduleInfo(ctx, dir)
 	if err != nil {
 		return nil, err
@@ -172,7 +183,14 @@ func loadWith(ctx context.Context, dir string, cfg *Config) (*Module, error) {
 			pkgs[path] = c.pkg
 		}
 		edges = append(edges, relations(pkgs, modelIDs(m.Packages))...)
-		m.Calls = collectCalls(checked)
+		callScope := scope
+		if callScope == nil {
+			callScope = func(path string) bool {
+				_, ok := checked[path]
+				return ok
+			}
+		}
+		m.Calls = collectCalls(checked, callScope)
 	}
 	m.Edges = normalizeEdges(edges)
 	return m, nil

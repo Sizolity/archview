@@ -22,6 +22,13 @@ Or run it from source:
 go run . -addr 127.0.0.1:8788
 ```
 
+Scan another directory, or a `go.work` workspace:
+
+```sh
+archview -dir ../other-module
+archview -dir /path/to/workspace     # go.work is detected
+```
+
 `-addr` defaults to `127.0.0.1:8788`, so the viewer is loopback-only unless you
 explicitly change it.
 
@@ -33,6 +40,13 @@ explicitly change it.
 | `-crap-cmd` | `go-crap` | command that produces the CRAP report |
 | `-no-crap` | `false` | skip CRAP metrics entirely |
 | `-config` | `archview.json` | config file to read |
+| `-dir` | `.` | directory to scan; a `go.work` in it means every module is scanned |
+
+`-dir` points the scan somewhere else. If that directory holds a `go.work`, every
+module it lists is scanned and merged into one model: package paths stay unique
+(they are import paths), source links are re-rooted under the workspace, calls
+crossing modules are kept, and CRAP scores still line up because go-crap reports
+workspace-relative paths too.
 
 ### Configuration
 
