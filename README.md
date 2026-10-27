@@ -1,3 +1,5 @@
+[![ci](https://github.com/Sizolity/archview/actions/workflows/ci.yml/badge.svg)](https://github.com/Sizolity/archview/actions/workflows/ci.yml)
+
 # archview
 
 A read-only, browser-based view of a Go module's architecture: packages,
@@ -262,5 +264,6 @@ How a scan becomes a page, the model schema and the trade-offs:
 ## Roadmap
 
 Unimplemented features with acceptance criteria live in [ROADMAP.md](ROADMAP.md).
+
 
 
