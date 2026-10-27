@@ -144,5 +144,14 @@ func (s *Server) source(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(renderSource(filepath.ToSlash(clean), data))
+	_, _ = w.Write(renderSource(filepath.ToSlash(clean), data, backRoute(r.URL.Query().Get("from"))))
+}
+
+// backRoute decides where the source page's 返回 link points. Only a local
+// route is accepted, so a crafted ?from= cannot turn the link into a redirect.
+func backRoute(from string) string {
+	if !strings.HasPrefix(from, "#/") || strings.ContainsAny(from, "\"'<> \r\n") {
+		return "/"
+	}
+	return "/" + from
 }

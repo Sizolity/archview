@@ -598,7 +598,7 @@
       html += "</div>";
     }
 
-    var href = sourceHref(t.pos);
+    var href = A.withFrom(sourceHref(t.pos), location.hash || "#/");
     if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
     side.innerHTML = html;
   }

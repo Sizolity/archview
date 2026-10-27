@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-//go:embed source.css
+//go:embed assets/source.css
 var sourceCSS []byte
 
 // span is one highlighted token: a byte range of the file and the CSS class
@@ -23,7 +23,11 @@ type span struct {
 // light card with a title bar, a scrollable monospace body, a line-number
 // gutter that stays out of the copied text, and Go highlighting so a long
 // string literal reads as a string instead of as stray text.
-func renderSource(path string, data []byte) []byte {
+//
+// back is where the 返回 link goes. The page opens in a new tab from the
+// inspector, so history.back() would have nothing to go back to; the caller
+// passes the route the reader came from instead.
+func renderSource(path string, data []byte, back string) []byte {
 	lines := lineRanges(data)
 	spans := goSpans(data)
 
@@ -33,7 +37,7 @@ func renderSource(path string, data []byte) []byte {
 	b.WriteString("<title>" + html.EscapeString(path) + "</title><style>")
 	b.WriteString(string(sourceCSS))
 	b.WriteString("</style></head><body><main class=\"page\">")
-	b.WriteString("<nav class=\"bar\"><a class=\"back\" href=\"/\" onclick=\"history.back();return false\">← 返回</a>")
+	b.WriteString("<nav class=\"bar\"><a class=\"back\" href=\"" + html.EscapeString(back) + "\">← 返回</a>")
 	b.WriteString("<span class=\"path\">" + html.EscapeString(path) + "</span></nav>")
 	b.WriteString("<section class=\"block\"><div class=\"head\"><span class=\"file\">" + html.EscapeString(path) + "</span>")
 	b.WriteString("<span class=\"lang\">go</span><span class=\"count\">" + fmt.Sprint(len(lines)) + " 行</span></div>")

@@ -22,7 +22,7 @@ func assertLinesPreserved(t *testing.T, src []byte, page string) {
 
 func TestRenderSourceHighlightsGo(t *testing.T) {
 	src := []byte("package a\n\n// doc\nfunc F(x int) string {\n\treturn \"hi\" // tail\n}\n")
-	page := string(renderSource("a.go", src))
+	page := string(renderSource("a.go", src, "/"))
 
 	for _, want := range []string{
 		`<span class="kw">package</span>`,
@@ -42,7 +42,7 @@ func TestRenderSourceHighlightsGo(t *testing.T) {
 // each line must still be its own row, still inside the string span.
 func TestRenderSourceSplitsMultiLineLiterals(t *testing.T) {
 	src := []byte("package a\n\nconst css = `a{\n  b: c;\n}`\n")
-	page := string(renderSource("a.go", src))
+	page := string(renderSource("a.go", src, "/"))
 
 	if !strings.Contains(page, `<span class="str">`) {
 		t.Fatalf("no string span in:\n%s", page)
@@ -61,7 +61,7 @@ func TestRenderSourceCountsLines(t *testing.T) {
 		"":                       "0 行",
 	}
 	for src, want := range cases {
-		if page := string(renderSource("a.go", []byte(src))); !strings.Contains(page, want) {
+		if page := string(renderSource("a.go", []byte(src), "/")); !strings.Contains(page, want) {
 			t.Errorf("renderSource(%q) does not say %q", src, want)
 		}
 	}
@@ -70,11 +70,35 @@ func TestRenderSourceCountsLines(t *testing.T) {
 func TestRenderSourceSurvivesBadInput(t *testing.T) {
 	// Invalid UTF-8 and unlexable Go must still render the bytes.
 	src := []byte("package a\ntype \xff\n")
-	page := string(renderSource("a.go", src))
+	page := string(renderSource("a.go", src, "/"))
 	if !strings.Contains(page, `<span class="ln" id="L1">`) {
 		t.Fatal("no lines rendered")
 	}
 	if stripTags(page) == "" {
 		t.Fatal("content vanished")
+	}
+}
+
+func TestBackRoute(t *testing.T) {
+	cases := map[string]string{
+		"":             "/",
+		"#/":           "/#/",
+		"#/type/a%23b": "/#/type/a%23b",
+		"javascript:x": "/",
+		"//evil.test":  "/",
+		"#/a\"b":       "/",
+		"#/a b":        "/",
+	}
+	for from, want := range cases {
+		if got := backRoute(from); got != want {
+			t.Errorf("backRoute(%q) = %q, want %q", from, got, want)
+		}
+	}
+}
+
+func TestRenderSourceBackLink(t *testing.T) {
+	page := string(renderSource("a.go", []byte("package a\n"), "/#/type/example.com%2Fapp"))
+	if !strings.Contains(page, `<a class="back" href="/#/type/example.com%2Fapp">← 返回</a>`) {
+		t.Fatalf("back link missing:\n%s", page[:400])
 	}
 }

@@ -20,10 +20,10 @@ import (
 	"time"
 )
 
-//go:embed ui.html
+//go:embed assets/ui.html
 var uiHTML []byte
 
-//go:embed ui.js
+//go:embed assets/ui.js
 var uiJS []byte
 
 // version is injected by goreleaser via -ldflags "-X main.version=...".

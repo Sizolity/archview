@@ -1,7 +1,7 @@
 // Tests for the pure UI helpers in ui.js. Run with `node --test`.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const ui = require("./ui.js");
+const ui = require("./assets/ui.js");
 
 function fixture() {
   return {
@@ -924,4 +924,19 @@ test("implements edges to a hidden package are not drawn", () => {
   assert.equal(scene.edges.filter((e) => e.kind).length, 0);
 });
 
+
+
+// ---------- source page links ----------
+
+test("withFrom puts the current route on a source link", () => {
+  assert.equal(
+    ui.withFrom("/source?path=a.go#L3", "#/type/example.com/app%23Server"),
+    "/source?path=a.go&from=%23%2Ftype%2Fexample.com%2Fapp%2523Server#L3"
+  );
+  // No fragment: the parameter goes straight on.
+  assert.equal(ui.withFrom("/source?path=a.go", "#/"), "/source?path=a.go&from=%23%2F");
+  // Other links are left alone.
+  assert.equal(ui.withFrom("vscode://file/x.go:3", "#/"), "vscode://file/x.go:3");
+  assert.equal(ui.withFrom("", "#/"), "");
+});
 

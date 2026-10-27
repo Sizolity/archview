@@ -41,6 +41,21 @@
     return (list || []).filter(function (x) { return all || x.exported; });
   }
 
+  // withFrom adds the current route to a /source link, so the source page can
+  // send the reader back to the exact view it came from. The fragment (the line
+  // anchor) must stay last.
+  function withFrom(href, from) {
+    var h = String(href || "");
+    if (h.indexOf("/source?") !== 0) return h;
+    var frag = "";
+    var i = h.indexOf("#");
+    if (i >= 0) {
+      frag = h.slice(i);
+      h = h.slice(0, i);
+    }
+    return h + (h.indexOf("?") >= 0 ? "&" : "?") + "from=" + encodeURIComponent(from || "#/") + frag;
+  }
+
   // ---------- layers ----------
 
   // pkgRel is the module-relative path, "" for the root package.
@@ -808,6 +823,7 @@
     typeHash: typeHash,
     parsePos: parsePos,
     sourceHref: sourceHref,
+    withFrom: withFrom,
     toAbs: toAbs,
     pathForURL: pathForURL,
     editorHref: editorHref,
