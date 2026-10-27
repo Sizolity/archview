@@ -33,6 +33,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8788", "监听地址(默认只绑回环)")
 	editor := flag.String("editor", "source", "源码跳转方式: source|vscode|goland|file|none")
 	out := flag.String("out", "", "把自包含页面写到该文件后退出(单文件导出)")
+	ednOut := flag.String("edn", "", "把 uml-viewer 拓扑 IR 写到该文件后退出")
 	crapCmd := flag.String("crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
 	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
 	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+defaultConfigFile+")")
@@ -107,20 +108,30 @@ func main() {
 	}
 	logger.Info("索引完成", "packages", len(m.Packages), "root", m.Root, "layers", len(cfg.Layers))
 
-	if *out != "" {
-		// Metrics and editor mode are already on the model; a static page has
-		// no /source endpoint, so "source" degrades to file:// links.
-		m.Editor = exportEditor(mode)
-		page, err := exportHTML(uiHTML, uiJS, m)
-		if err != nil {
-			logger.Error("导出失败", "err", err)
-			os.Exit(1)
+	if *out != "" || *ednOut != "" {
+		if *out != "" {
+			// Metrics and editor mode are already on the model; a static page
+			// has no /source endpoint, so "source" degrades to file:// links.
+			m.Editor = exportEditor(mode)
+			page, err := exportHTML(uiHTML, uiJS, m)
+			if err != nil {
+				logger.Error("导出失败", "err", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(*out, page, 0o644); err != nil {
+				logger.Error("写文件失败", "path", *out, "err", err)
+				os.Exit(1)
+			}
+			logger.Info("已导出单文件页面", "path", *out, "bytes", len(page))
 		}
-		if err := os.WriteFile(*out, page, 0o644); err != nil {
-			logger.Error("写文件失败", "path", *out, "err", err)
-			os.Exit(1)
+		if *ednOut != "" {
+			ir := exportEDN(m)
+			if err := os.WriteFile(*ednOut, ir, 0o644); err != nil {
+				logger.Error("写文件失败", "path", *ednOut, "err", err)
+				os.Exit(1)
+			}
+			logger.Info("已导出 EDN", "path", *ednOut, "bytes", len(ir))
 		}
-		logger.Info("已导出单文件页面", "path", *out, "bytes", len(page))
 		return
 	}
 

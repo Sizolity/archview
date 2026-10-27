@@ -37,6 +37,7 @@ explicitly change it.
 | `-addr` | `127.0.0.1:8788` | listen address |
 | `-editor` | `source` | where "查看源码" jumps: `source`, `vscode`, `goland`, `file`, `none` |
 | `-out` | | write a self-contained page to this file and exit |
+| `-edn` | | write the uml-viewer topology IR to this file and exit |
 | `-crap-cmd` | `go-crap` | command that produces the CRAP report |
 | `-no-crap` | `false` | skip CRAP metrics entirely |
 | `-config` | `archview.json` | config file to read |
@@ -99,6 +100,20 @@ protocol opens the file directly.
 ```sh
 archview -out view.html -editor vscode
 ```
+
+### EDN export
+
+```sh
+archview -edn view.edn
+```
+
+`view.edn` is the topology IR [uml-viewer](https://github.com/unclebob/uml-viewer)
+reads: `:packages` of `:classes` with `:fields` and `:ops`, plus `:edges`.
+Relations map to the IR's edge kinds — `uses` → `:association`, `implements` →
+`:implements`, `embeds` → `:aggregation` — and class ids are stable slugs
+(`wiki.Page` → `:wiki-page`). When CRAP was collected, each class also carries
+`:crap` (the mean of its methods) and `:coverage` as a 0–1 ratio. Importing an
+existing IR is not implemented.
 
 ## What it shows
 

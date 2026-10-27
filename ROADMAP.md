@@ -58,7 +58,7 @@
 `2.3` → `4.3`→`3.4`→`3.2`→`3.1`→`2.2` → `4.5`→`4.4`→`2.4`→`5.3`。
 理由:`2.2` 要 `2.1` 的 `types.Info`,`3.1` 要 `2.1` 的 `embeds`/`implements` 边,
 `3.4` 要 `4.3` 的 `layers` 配置,`4.1` 与 `4.2` 改同一处取数/链接代码。
-已完成:`2.1`、`2.2`、`2.3`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.4`、`4.5`、`5.1`、`5.2`;部分:`5.3`(版本/发布配置/设计文档)。
+已完成:`2.1`、`2.2`、`2.3`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.4`、`4.5`、`5.1`、`5.2`;部分:`2.4`(只有导出)、`5.3`(版本/发布配置/设计文档)。
 
 ## 2. 数据与关系
 
@@ -139,29 +139,26 @@ archview 只做取数、映射与着色,**不新增 Go 依赖**:go-crap 是外�
 - go-crap 不在 `PATH`:服务仍启动,`/model.json` 200,`warnings` 有记录(单测覆盖);
 - 不写目标仓库:报告走 stdout,`git status` 干净。
 
-### 2.4 EDN 兼容(P2)
+### 2.4 EDN 兼容(P2) — 部分完成 2026-10-27
 
-**现状**:自有 JSON 模型。
+**导出 `-edn out.edn`** 已完成,输出 [uml-viewer](https://github.com/unclebob/uml-viewer)
+的静态拓扑 IR。schema 来自它的 README(`## IR` 一节),不是猜的:
 
-**目标**:
+- `:title` / `:direction :tb` / `:packages` / `:classes` / `:fields` / `:ops` / `:edges`;
+- 关系映射:`uses` → `:association`、`implements` → `:implements`、
+  `embeds` → `:aggregation`;调用图在该 IR 里没有对应 kind,不导出;
+- id 是稳定 slug(`internal/wiki` 的 `Page` → `:wiki-page`),重名自动加 `-2`;
+- 有指标时给类写 `:crap`(方法均值)与 `:coverage`(0–1,uml-viewer 的口径);
+- 签名拆成 `:args` / `:returns`(`splitSig`,嵌套括号不误切);
+- 字符串按 EDN 规则转义。
 
-- `-edn out.edn` 输出 [uml-viewer](https://github.com/unclebob/uml-viewer) 能读的
-  topology IR(`:packages`/`:classes`/`:fields`/`:ops`/`:edges`);
-- `-import-edn` 读入同类 IR 渲染;
-- 可选叠加 `.metrics/crap.edn`(crapper 产物)。
+导入(`-import-edn`)未做:要自写最小 EDN reader,等有真实需求再开工。
 
-**实现要点**:
+验收状态:
 
-- 先做导出(结构简单),再做导入;
-- 导入需要最小 EDN reader(支持 map/vector/keyword/string/number/bool/nil),不要引第三方;
-- 字段映射:`TypeInfo` → `:classes`,`FieldInfo` → `:fields`,`MethodInfo` → `:ops`;
-  id 用稳定 slug(`wiki.Page` → `:wiki-page`)。
-
-**验收**:
-
-- 导出的 EDN 能被 uml-viewer 打开(手动,需 Clojure/JVM);
-- 导入后再导出,结构等价;
-- 未知 key 忽略并计数,不 panic。
+- [ ] 导出的 EDN 能被 uml-viewer 打开 —— 需要本机有 Clojure/JVM,当前环境没有,未实测;
+- [ ] 导入后再导出结构等价 —— 导入未做;
+- [x] 结构按官方 schema 写,并有单测(id 唯一、边类型、转义、指标、签名拆分)。
 
 ## 3. 渲染与交互
 
