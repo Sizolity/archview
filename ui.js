@@ -618,8 +618,9 @@
       pkgs.forEach(function (p) {
         (p.imports || []).forEach(function (imp) {
           if (!idx.pkgByPath.has(imp)) return;
-          var edge = { from: imp, to: p.path, ref: false };
-          // p imports imp: the dependency points from p to imp.
+          // One direction everywhere: the arrow leaves the dependent and points
+          // at what it depends on.
+          var edge = { from: p.path, to: imp, ref: false };
           if (layerViolation(model.layers, model.path, p.path, imp)) edge.violation = true;
           edges.push(edge);
         });
@@ -633,6 +634,7 @@
           if (!hit) n.dim = true;
         });
       }
+      applyMoved(nodes, view.moved);
       return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs };
     }
 
@@ -669,6 +671,14 @@
 
     var tedges = pairs.filter(function (e) {
       return byId.has(e.from) && byId.has(e.to);
+    });
+
+    // implements / embeds come from go/types and get their own line style, so
+    // a reader can tell the three relations apart at a glance.
+    (model.edges || []).forEach(function (e) {
+      if (e.kind !== "implements" && e.kind !== "embeds") return;
+      if (!byId.has(e.from) || !byId.has(e.to)) return;
+      tedges.push({ from: e.from, to: e.to, kind: e.kind });
     });
 
     // Call edges are aggregated to the type level: a method of A calling a
@@ -708,20 +718,48 @@
     };
     if (view.declutter) scene = declutterScene(scene, scene.selected);
     if (view.focus) scene = focusScene(scene, view.focus);
+    applyMoved(scene.nodes, view.moved);
     return scene;
   }
 
   // ---------- geometry ----------
 
+  // edgePath routes along the axis with the larger gap: the layered layout
+  // stacks dependencies below their users, so most edges leave the bottom and
+  // enter the top. Same band (or grid) falls back to a horizontal route. The
+  // path always ends at the target, so one arrow marker is enough.
   function edgePath(a, b) {
-    var x1 = a.x + a.w, y1 = a.y + a.h / 2;
-    var x2 = b.x, y2 = b.y + b.h / 2;
-    if (x2 <= x1) {
-      var dx = Math.max(70, Math.abs(x1 - x2) / 2);
-      return "M" + x1 + "," + y1 + " C" + (x1 + dx) + "," + y1 + " " + (x2 - dx) + "," + y2 + " " + x2 + "," + y2;
+    var acx = a.x + a.w / 2, acy = a.y + a.h / 2;
+    var bcx = b.x + b.w / 2, bcy = b.y + b.h / 2;
+    var dx = bcx - acx, dy = bcy - acy;
+
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      var down = dy >= 0;
+      var y1 = down ? a.y + a.h : a.y;
+      var y2 = down ? b.y : b.y + b.h;
+      var my = (y1 + y2) / 2;
+      return "M" + acx + "," + y1 + " C" + acx + "," + my + " " + bcx + "," + my + " " + bcx + "," + y2;
     }
+
+    var right = dx >= 0;
+    var x1 = right ? a.x + a.w : a.x;
+    var x2 = right ? b.x : b.x + b.w;
     var mx = (x1 + x2) / 2;
-    return "M" + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2;
+    return "M" + x1 + "," + acy + " C" + mx + "," + acy + " " + mx + "," + bcy + " " + x2 + "," + bcy;
+  }
+
+  // applyMoved drops the positions a user dragged onto the freshly laid out
+  // nodes. It mutates in place and returns the scene for convenience.
+  function applyMoved(nodes, moved) {
+    if (!moved || !nodes) return nodes;
+    nodes.forEach(function (n) {
+      var p = moved[n.id];
+      if (p) {
+        n.x = p.x;
+        n.y = p.y;
+      }
+    });
+    return nodes;
   }
 
   // fitTransform centres the scene in the viewport and keeps the zoom between
@@ -786,6 +824,7 @@
     typeCrap: typeCrap,
     buildScene: buildScene,
     edgePath: edgePath,
+    applyMoved: applyMoved,
     fitTransform: fitTransform
   };
 });

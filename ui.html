@@ -111,6 +111,8 @@
   .edge.violation { stroke: #dc2626; stroke-width: 1.9; }
   .edge.call { stroke: #0891b2; }
   .edge.call.dynamic { stroke-dasharray: 3 3; }
+  .edge.impl { stroke: #16a34a; }
+  .edge.emb { stroke: #2563eb; }
   .badge-svg { font-size: 9px; fill: #475569; }
   .crap { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .crap.ok { background: #dcfce7; color: #166534; }
@@ -215,6 +217,7 @@
   var state = {
     model: null, all: false, q: "", route: { view: "home" },
     focus: false, collapsed: [], declutter: false, layout: "layer", calls: false,
+    moved: {}, suppressClick: false,
     hits: [], hitIndex: 0,
     tx: 0, ty: 0, k: 1, sceneKey: "", scene: null
   };
@@ -276,15 +279,47 @@
 
   // ---------- drawing ----------
 
+  // One marker per line style: the arrow carries the relation colour.
+  var MARKERS = [
+    { id: "arrow", fill: "#94a3b8" },
+    { id: "arrow-ref", fill: "#8b5cf6" },
+    { id: "arrow-impl", fill: "#16a34a" },
+    { id: "arrow-emb", fill: "#2563eb" },
+    { id: "arrow-call", fill: "#0891b2" },
+    { id: "arrow-violation", fill: "#dc2626" }
+  ];
+
+  function markerFor(e) {
+    if (e.violation) return "arrow-violation";
+    if (e.call) return "arrow-call";
+    if (e.kind === "implements") return "arrow-impl";
+    if (e.kind === "embeds") return "arrow-emb";
+    if (e.ref) return "arrow-ref";
+    return "arrow";
+  }
+
+  // edgeClass names the relation so the CSS owns the look.
+  function edgeClass(e) {
+    var cls = "edge";
+    if (e.ref) cls += " ref";
+    if (e.kind === "implements") cls += " impl";
+    if (e.kind === "embeds") cls += " emb";
+    if (e.call) cls += " call" + (e.dynamic ? " dynamic" : "");
+    if (e.violation) cls += " violation";
+    return cls;
+  }
+
   function draw(scene) {
     svg.innerHTML = "";
     var defs = el("defs");
-    var marker = el("marker", {
-      id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5",
-      markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse"
+    MARKERS.forEach(function (m) {
+      var marker = el("marker", {
+        id: m.id, viewBox: "0 0 10 10", refX: "9", refY: "5",
+        markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse"
+      });
+      marker.appendChild(el("path", { d: "M0,0 L10,5 L0,10 z", fill: m.fill }));
+      defs.appendChild(marker);
     });
-    marker.appendChild(el("path", { d: "M0,0 L10,5 L0,10 z", fill: "#94a3b8" }));
-    defs.appendChild(marker);
     svg.appendChild(defs);
 
     var world = el("g", { id: "world" });
@@ -298,12 +333,13 @@
       if (!a || !b) return;
       var p = el("path", {
         d: A.edgePath(a, b),
-        class: "edge" + (e.ref ? " ref" : "") + (e.violation ? " violation" : "") +
-          (e.call ? " call" + (e.dynamic ? " dynamic" : "") : "")
+        class: edgeClass(e),
+        "marker-end": "url(#" + markerFor(e) + ")"
       });
       if (!e.ref) {
-        // A native tooltip: the edge means "to imports from".
-        p.appendChild(el("title", {}, (e.violation ? "违规依赖: " : "") + e.to + " → " + e.from));
+        // A native tooltip: the arrow leaves the dependent and points at the
+        // thing it depends on.
+        p.appendChild(el("title", {}, (e.violation ? "违规依赖: " : "") + e.from + " → " + e.to));
       }
       world.appendChild(p);
     });
@@ -362,7 +398,17 @@
         });
         g.appendChild(fold);
       }
-      g.addEventListener("click", function (ev) { ev.stopPropagation(); go(n.href); });
+      g.addEventListener("mousedown", function (ev) {
+        ev.stopPropagation();
+        ev.preventDefault();
+        state.suppressClick = false;
+        nodeDrag = { id: n.id, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false };
+      });
+      g.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        if (state.suppressClick) return;
+        go(n.href);
+      });
       world.appendChild(g);
     });
 
@@ -630,15 +676,16 @@
     var hint = document.getElementById("hint");
     hint.textContent =
       (state.focus && isType ? "已聚焦：只显示一跳邻居 · Esc 退出 · " : "") +
-      "拖拽平移 · 滚轮缩放 · 点击方框下钻" +
+      "拖拽平移 · 滚轮缩放 · 点击方框下钻 · 拖动卡片可摆放" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
-      " · ▾ 折叠成员";
+      " · 箭头指向被依赖方 · ▾ 折叠成员";
   }
 
   // ---------- input ----------
 
   var drag = null;
+  var nodeDrag = null;
   svg.addEventListener("mousedown", function (e) {
     if (e.target.closest(".node")) return;
     drag = { x: e.clientX, y: e.clientY, tx: state.tx, ty: state.ty };
@@ -646,12 +693,31 @@
     e.preventDefault();
   });
   window.addEventListener("mousemove", function (e) {
+    if (nodeDrag && state.scene) {
+      // Cards can be placed by hand: the position is remembered per node id and
+      // reapplied on the next render (editing code, switching filters).
+      var dx = (e.clientX - nodeDrag.sx) / state.k;
+      var dy = (e.clientY - nodeDrag.sy) / state.k;
+      if (Math.abs(dx) + Math.abs(dy) > 2) nodeDrag.moved = true;
+      var pos = { x: nodeDrag.ox + dx, y: nodeDrag.oy + dy };
+      state.moved[nodeDrag.id] = pos;
+      state.scene.nodes.forEach(function (n) {
+        if (n.id === nodeDrag.id) { n.x = pos.x; n.y = pos.y; }
+      });
+      draw(state.scene);
+      return;
+    }
     if (!drag) return;
     state.tx = drag.tx + (e.clientX - drag.x);
     state.ty = drag.ty + (e.clientY - drag.y);
     applyTransform();
   });
   window.addEventListener("mouseup", function () {
+    if (nodeDrag) {
+      state.suppressClick = nodeDrag.moved;
+      nodeDrag = null;
+      return;
+    }
     if (!drag) return;
     drag = null;
     svg.classList.remove("grabbing");
@@ -682,6 +748,7 @@
   });
   document.getElementById("layout").addEventListener("change", function (e) {
     state.layout = e.target.value;
+    state.moved = {}; // hand-placed cards belong to the layout they were placed in
     state.sceneKey = "";
     render();
   });

@@ -198,7 +198,7 @@ test("buildScene draws packages and imports on the home view", () => {
   assert.equal(scene.kind, "packages");
   assert.equal(scene.key, "home");
   assert.equal(scene.nodes.length, 2);
-  assert.deepEqual(scene.edges, [{ from: "example.com/app/store", to: "example.com/app", ref: false }]);
+  assert.deepEqual(scene.edges, [{ from: "example.com/app", to: "example.com/app/store", ref: false }]);
 });
 
 test("buildScene draws type cards and reference edges for a package", () => {
@@ -401,8 +401,8 @@ test("buildScene marks layer violations on import edges", () => {
   const scene = ui.buildScene(model, idx, { view: "home" }, false);
 
   assert.equal(scene.edges.length, 1);
-  assert.equal(scene.edges[0].from, "example.com/app/platform");
-  assert.equal(scene.edges[0].to, "example.com/app/web");
+  assert.equal(scene.edges[0].from, "example.com/app/web");
+  assert.equal(scene.edges[0].to, "example.com/app/platform");
   assert.equal(scene.edges[0].violation, true);
 });
 
@@ -832,4 +832,80 @@ test("searchHits breaks name ties alphabetically", () => {
   const named = hits.filter((h) => h.nameMatch).map((h) => h.name);
   assert.ok(named.length > 1, "need at least two name matches, got " + named.length);
   assert.deepEqual(named, named.slice().sort((a, b) => a.localeCompare(b)));
+});
+
+
+// ---------- edges: routing, styles, dragging ----------
+
+test("edgePath routes vertically when the target sits below", () => {
+  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 150, y: 300, w: 100, h: 50 });
+  // Leaves the bottom centre (50,50) and enters the top centre (200,300).
+  assert.match(d, /^M50,50 C/);
+  assert.match(d, / 200,300$/);
+});
+
+test("edgePath routes horizontally when the target sits beside", () => {
+  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 20, w: 100, h: 50 });
+  assert.match(d, /^M100,25 C/);
+  assert.match(d, / 300,45$/);
+});
+
+test("edgePath points the same way whatever the order", () => {
+  const a = { x: 0, y: 0, w: 100, h: 50 };
+  const b = { x: 300, y: 300, w: 100, h: 50 };
+  // Reversing the pair must produce the reverse path, so the arrow always ends
+  // on the target and the line never doubles back on itself.
+  const forward = ui.edgePath(a, b);
+  const backward = ui.edgePath(b, a);
+  assert.match(forward, /^M50,50 /);
+  assert.match(backward, /^M350,300 /);
+  assert.match(backward, / 50,50$/);
+});
+
+test("applyMoved overrides laid out positions", () => {
+  const nodes = [{ id: "a", x: 1, y: 2 }, { id: "b", x: 3, y: 4 }];
+  ui.applyMoved(nodes, { a: { x: 10, y: 20 } });
+  assert.deepEqual(nodes[0], { id: "a", x: 10, y: 20 });
+  assert.deepEqual(nodes[1], { id: "b", x: 3, y: 4 });
+  ui.applyMoved(nodes, null);
+  assert.deepEqual(nodes[0], { id: "a", x: 10, y: 20 });
+});
+
+test("buildScene applies dragged positions", () => {
+  const model = fixture();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false, {
+    moved: { "example.com/app#App": { x: 500, y: 600 } }
+  });
+  const app = scene.nodes.find((n) => n.id === "example.com/app#App");
+  assert.equal(app.x, 500);
+  assert.equal(app.y, 600);
+});
+
+test("implements and embeds edges keep their kind, uses stays a ref", () => {
+  const model = fixture();
+  model.edges = [
+    { kind: "implements", from: "example.com/app#App", to: "example.com/app#Server" },
+    { kind: "embeds", from: "example.com/app#Server", to: "example.com/app#App" },
+    { kind: "uses", from: "example.com/app#App", to: "example.com/app#Server" }
+  ];
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+  const kinds = scene.edges
+    .filter((e) => e.kind)
+    .map((e) => e.kind + ":" + e.from + ">" + e.to);
+  assert.deepEqual(kinds.sort(), [
+    "embeds:example.com/app#Server>example.com/app#App",
+    "implements:example.com/app#App>example.com/app#Server"
+  ]);
+});
+
+test("implements edges to a hidden package are not drawn", () => {
+  const model = fixture();
+  model.edges = [
+    { kind: "implements", from: "example.com/app#App", to: "example.com/app/store#DB" }
+  ];
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+  assert.equal(scene.edges.filter((e) => e.kind).length, 0);
 });
