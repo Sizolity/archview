@@ -13,9 +13,12 @@ import (
 )
 
 // Server serves the explorer UI, the model snapshot and a read-only source view.
+// Load may return a shared, read-only model (the cache hands out one pointer),
+// so handlers must not mutate it.
 type Server struct {
 	Root string
 	UI   []byte
+	JS   []byte
 	Load func(context.Context) (*Module, error)
 }
 
@@ -23,6 +26,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("GET /ui.js", s.script)
 	mux.HandleFunc("GET /model.json", s.model)
 	mux.HandleFunc("GET /source", s.source)
 	mux.HandleFunc("GET /healthz", s.health)
@@ -33,6 +37,12 @@ func (s *Server) index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(s.UI)
+}
+
+func (s *Server) script(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(s.JS)
 }
 
 func (s *Server) model(w http.ResponseWriter, r *http.Request) {

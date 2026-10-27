@@ -38,6 +38,11 @@
     background: var(--panel); color: #334155; font: inherit; cursor: pointer;
   }
   .tools button:hover { border-color: #bfdbfe; background: var(--soft); }
+  .tools button.on { border-color: #bfdbfe; background: var(--soft); color: var(--accent); }
+  .tools select {
+    padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); color: #334155; font: inherit; cursor: pointer;
+  }
   .check { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
   #status { color: var(--muted); font-size: 12px; white-space: nowrap; }
   main { display: flex; height: calc(100vh - 56px); }
@@ -91,6 +96,9 @@
   .src:hover { text-decoration: none; filter: brightness(1.05); }
   .err { color: #b91c1c; }
   .node { cursor: pointer; }
+  .node.dim { opacity: .2; }
+  mark { background: #fef08a; color: inherit; padding: 0 1px; border-radius: 3px; }
+  tr.sel td { background: var(--soft); }
   .node text { pointer-events: none; user-select: none; }
   .node .box { stroke-width: 1.5; }
   .node .title { font-size: 13px; font-weight: 600; fill: #0f172a; }
@@ -100,7 +108,21 @@
   .node.selected .box { stroke: #16a34a; stroke-width: 3; }
   .edge { fill: none; stroke: #94a3b8; stroke-width: 1.4; }
   .edge.ref { stroke: #8b5cf6; stroke-dasharray: 4 3; }
+  .edge.violation { stroke: #dc2626; stroke-width: 1.9; }
+  .edge.call { stroke: #0891b2; }
+  .edge.call.dynamic { stroke-dasharray: 3 3; }
   .badge-svg { font-size: 9px; fill: #475569; }
+  .crap { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .crap.ok { background: #dcfce7; color: #166534; }
+  .crap.warn { background: #fef3c7; color: #92400e; }
+  .crap.bad { background: #fee2e2; color: #991b1b; }
+  .legend { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .legend b { font-weight: 600; }
+  .legend b.ok { color: #166534; }
+  .legend b.warn { color: #92400e; }
+  .legend b.bad { color: #991b1b; }
+  .node .crap-text { font-size: 10px; font-weight: 600; }
+  .node .fold { font-size: 10px; fill: #64748b; cursor: pointer; }
   @media (max-width: 980px) {
     aside { width: 330px; }
     .tools input[type="search"] { width: 160px; }
@@ -114,8 +136,16 @@
   <div class="tools">
     <input id="q" type="search" placeholder="搜索类型 / 函数…（/）" autocomplete="off">
     <label class="check"><input id="all" type="checkbox"> 含未导出</label>
+    <label class="check"><input id="declutter" type="checkbox"> 精简</label>
+    <label class="check"><input id="calls" type="checkbox"> 调用边</label>
+    <select id="layout" title="布局方式">
+      <option value="layer">依赖分层</option>
+      <option value="kind">按类型分组</option>
+    </select>
+    <button id="focus" type="button" title="只显示选中类型的一跳邻居（Esc 退出）">聚焦</button>
     <button id="fit" type="button">适应</button>
     <button id="reload" type="button">重载</button>
+    <span id="legend" class="legend" hidden>CRAP <b class="ok">≤5</b> <b class="warn">≤30</b> <b class="bad">&gt;30</b></span>
     <span id="status"></span>
   </div>
 </header>
@@ -126,10 +156,15 @@
   </section>
   <aside id="side"></aside>
 </main>
+<!-- archview:data -->
+<script src="/ui.js"></script>
 <script>
 (function () {
   "use strict";
 
+  // Everything that does not touch the DOM lives in ui.js, where node --test
+  // can reach it; this file keeps the page wiring only.
+  var A = window.ArchView;
   var NS = "http://www.w3.org/2000/svg";
   var svg = document.getElementById("svg");
   var side = document.getElementById("side");
@@ -138,70 +173,78 @@
   var qEl = document.getElementById("q");
   var allEl = document.getElementById("all");
 
+  var esc = A.esc, cut = A.cut, short = A.short;
+  var pkgHash = A.pkgHash, typeHash = A.typeHash;
+
+  // The jump target depends on -editor (4.2): vscode://, goland://, file://,
+  // the built-in /source page, or nothing at all.
+  function sourceHref(pos) {
+    return A.editorHref(state.model && state.model.editor, state.model && state.model.root, pos);
+  }
+
+  var CRAP_FILL = { ok: "#dcfce7", warn: "#fef3c7", bad: "#fee2e2" };
+  var CRAP_INK = { ok: "#166534", warn: "#92400e", bad: "#991b1b" };
+
+  // crapCell renders one CRAP cell, or a dash when go-crap reported nothing.
+  function crapCell(m) {
+    if (!m || !m.metrics) return '<td class="meta">—</td>';
+    var mt = m.metrics;
+    return '<td><span class="crap ' + A.crapLevel(mt.crap, A.crapThresholds(state.model)) + '" title="CC ' + mt.cyclomatic +
+      " · 覆盖 " + mt.coverage.toFixed(1) + '%">' + A.formatCrap(mt.crap) + "</span></td>";
+  }
+
+  function crapChip(v) {
+    if (v == null) return "";
+    return '<span class="crap ' + A.crapLevel(v, A.crapThresholds(state.model)) + '">CRAP ' + A.formatCrap(v) + "</span>";
+  }
+
+  // callLabel turns a function ID into a link to its owner type, or plain code
+  // when the target is a package-level function (or an interface method with no
+  // node of its own).
+  function callLabel(id) {
+    var f = idx.funcById.get(id);
+    if (f) {
+      return f.owner ? typeLink(f.owner, f.name) : '<code class="sig">' + esc(f.name) + "</code>";
+    }
+    var owner = A.ownerTypeID(id);
+    var name = A.funcName(id);
+    if (owner && idx.typeById.has(owner)) return typeLink(owner, name);
+    return '<code class="sig">' + esc(name) + "</code>";
+  }
+
   var state = {
     model: null, all: false, q: "", route: { view: "home" },
+    focus: false, collapsed: [], declutter: false, layout: "layer", calls: false,
+    hits: [], hitIndex: 0,
     tx: 0, ty: 0, k: 1, sceneKey: "", scene: null
   };
 
   var idx = { pkgByPath: new Map(), typeById: new Map(), incoming: new Map() };
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-  function rel(p) {
-    if (!state.model) return p;
-    var pre = state.model.path + "/";
-    return p.indexOf(pre) === 0 ? p.slice(pre.length) : p;
-  }
-  function short(p) { return String(p).split("/").pop(); }
-  function vis(list) {
-    return (list || []).filter(function (x) { return state.all || x.exported; });
-  }
+  function rel(p) { return A.relPath(state.model && state.model.path, p); }
+  function vis(list) { return A.visible(list, state.all); }
   function el(name, attrs, text) {
     var n = document.createElementNS(NS, name);
     if (attrs) for (var k in attrs) n.setAttribute(k, attrs[k]);
     if (text != null) n.textContent = text;
     return n;
   }
-  function cut(s, n) {
-    s = String(s == null ? "" : s);
-    return s.length <= n ? s : s.slice(0, n - 1) + "…";
-  }
-  function addIncoming(target, from, label) {
-    if (!idx.incoming.has(target)) idx.incoming.set(target, []);
-    var list = idx.incoming.get(target);
-    for (var i = 0; i < list.length; i++) if (list[i].from === from && list[i].label === label) return;
-    list.push({ from: from, label: label });
-  }
-
-  function indexModel() {
-    idx.pkgByPath.clear(); idx.typeById.clear(); idx.incoming.clear();
-    state.model.packages.forEach(function (p) {
-      p.types = p.types || []; p.funcs = p.funcs || [];
-      p.consts = p.consts || []; p.vars = p.vars || []; p.imports = p.imports || [];
-      idx.pkgByPath.set(p.path, p);
-      p.types.forEach(function (t) { t.pkg = p; idx.typeById.set(t.id, t); });
-    });
-    idx.typeById.forEach(function (t) {
-      (t.fields || []).forEach(function (f) { (f.refs || []).forEach(function (r) { addIncoming(r, t.id, "字段 " + f.name); }); });
-      (t.methods || []).forEach(function (m) { (m.refs || []).forEach(function (r) { addIncoming(r, t.id, "方法 " + m.name); }); });
-    });
-    state.model.packages.forEach(function (p) {
-      p.funcs.forEach(function (f) { (f.refs || []).forEach(function (r) { addIncoming(r, p.path, "函数 " + f.name); }); });
-    });
-  }
 
   // ---------- model fetch ----------
 
   async function fetchModel() {
-    statusEl.textContent = "扫描中…";
-    var r = await fetch("/model.json", { cache: "no-store" });
-    if (!r.ok) throw new Error(await r.text());
-    state.model = await r.json();
+    if (window.__ARCHVIEW_DATA__) {
+      // Single-file export (4.1): the model is inlined and there is no server.
+      state.model = window.__ARCHVIEW_DATA__;
+      document.getElementById("reload").style.display = "none";
+    } else {
+      statusEl.textContent = "扫描中…";
+      var r = await fetch("/model.json", { cache: "no-store" });
+      if (!r.ok) throw new Error(await r.text());
+      state.model = await r.json();
+    }
     document.getElementById("brand").textContent = short(state.model.path);
-    indexModel();
+    idx = A.indexModel(state.model);
     updateStatus();
   }
 
@@ -212,161 +255,24 @@
       types += vis(p.types).length; funcs += vis(p.funcs).length;
     });
     statusEl.textContent = state.model.packages.length + " 包 · " + types + " 类型 · " + funcs + " 函数";
+    var legend = document.getElementById("legend");
+    legend.hidden = !state.model.metrics;
+    if (state.model.metrics) {
+      var t = A.crapThresholds(state.model);
+      legend.innerHTML = "CRAP <b class=\"ok\">≤" + t[0] + "</b> <b class=\"warn\">≤" + t[1] +
+        "</b> <b class=\"bad\">&gt;" + t[1] + "</b>";
+    }
   }
 
   // ---------- routing ----------
 
-  function parseHash() {
-    var h = location.hash || "#/";
-    var parts = h.slice(2).split("/");
-    if (parts[0] === "pkg" && parts[1]) return { view: "pkg", path: decodeURIComponent(parts.slice(1).join("/")) };
-    if (parts[0] === "type" && parts[1]) return { view: "type", id: decodeURIComponent(parts.slice(1).join("/")) };
-    return { view: "home" };
-  }
   function go(hash) {
     if (location.hash === hash) render();
     else location.hash = hash;
   }
-  function pkgHash(path) { return "#/pkg/" + encodeURIComponent(path); }
-  function typeHash(id) { return "#/type/" + encodeURIComponent(id); }
 
-  // ---------- scene ----------
-
-  function buildScene() {
-    var route = state.route;
-    if (route.view === "home" || styleHome(route)) {
-      var pkgs = state.model.packages.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
-      var nodes = layoutPackages(pkgs);
-      var edges = [];
-      pkgs.forEach(function (p) {
-        p.imports.forEach(function (imp) {
-          if (idx.pkgByPath.has(imp)) edges.push({ from: imp, to: p.path, ref: false });
-        });
-      });
-      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs };
-    }
-
-    var pkg;
-    if (route.view === "type") {
-      var selectedType = idx.typeById.get(route.id);
-      pkg = selectedType ? selectedType.pkg : null;
-    } else {
-      pkg = idx.pkgByPath.get(route.path);
-    }
-    if (!pkg) return null;
-    var types = vis(pkg.types);
-    if (route.view === "type") {
-      var selected = idx.typeById.get(route.id);
-      if (selected && types.indexOf(selected) < 0) types.push(selected);
-    }
-    var tnodes = layoutTypes(pkg, types);
-    var byId = new Map();
-    tnodes.forEach(function (n) { byId.set(n.id, n); });
-    var tedges = [];
-    var seen = {};
-    tnodes.forEach(function (n) {
-      var t = idx.typeById.get(n.id);
-      if (!t) return;
-      (t.fields || []).forEach(function (f) {
-        (f.refs || []).forEach(function (r) {
-          if (r === n.id || !byId.has(r)) return;
-          var k = n.id + ">" + r;
-          if (seen[k]) return;
-          seen[k] = true;
-          tedges.push({ from: n.id, to: r, ref: true });
-        });
-      });
-    });
-    return {
-      kind: "types", key: "pkg:" + pkg.path, nodes: tnodes, edges: tedges,
-      pkg: pkg, selected: route.view === "type" ? route.id : null
-    };
-  }
-
-  function styleHome(route) {
-    return route.view === "pkg" && !idx.pkgByPath.has(route.path);
-  }
-
-  function layoutPackages(pkgs) {
-    var depth = new Map();
-    pkgs.forEach(function (p) { depth.set(p.path, 0); });
-    for (var round = 0; round < pkgs.length; round++) {
-      pkgs.forEach(function (p) {
-        p.imports.forEach(function (imp) {
-          var q = idx.pkgByPath.get(imp);
-          if (!q) return;
-          var d = Math.max(depth.get(p.path), depth.get(q.path) + 1);
-          depth.set(p.path, d);
-        });
-      });
-    }
-    var cols = new Map();
-    pkgs.forEach(function (p) {
-      var d = depth.get(p.path);
-      if (!cols.has(d)) cols.set(d, []);
-      cols.get(d).push(p);
-    });
-    var nodes = [];
-    cols.forEach(function (list, d) {
-      list.sort(function (a, b) { return a.path.localeCompare(b.path); });
-      list.forEach(function (p, i) {
-        nodes.push({
-          id: p.path,
-          kind: "pkg",
-          x: 40 + d * 320,
-          y: 40 + i * 96,
-          w: 240,
-          h: 68,
-          title: short(p.path),
-          sub: rel(p.path),
-          lines: [vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数"],
-          href: pkgHash(p.path),
-          selected: false
-        });
-      });
-    });
-    return nodes;
-  }
-
-  function typeRows(t) {
-    var rows = [];
-    vis(t.fields).forEach(function (f) {
-      rows.push((f.exported ? "+ " : "- ") + (f.embedded ? f.type : f.name + ": " + f.type));
-    });
-    vis(t.methods).forEach(function (m) {
-      rows.push((m.exported ? "+ " : "- ") + m.name + m.sig);
-    });
-    return rows;
-  }
-
-  function layoutTypes(pkg, types) {
-    var nodes = [];
-    var w = 290, cols = 3;
-    var ys = [40, 40, 40];
-    types.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).forEach(function (t, i) {
-      var rows = typeRows(t);
-      var shown = rows.slice(0, 7);
-      var more = rows.length - shown.length;
-      var h = 30 + Math.max(1, shown.length) * 17 + (more > 0 ? 17 : 0) + 12;
-      var c = i % cols;
-      nodes.push({
-        id: t.id,
-        kind: "type",
-        x: 40 + c * (w + 40),
-        y: ys[c],
-        w: w,
-        h: h,
-        title: t.name,
-        rows: shown,
-        more: more,
-        sub: t.kind + " · " + t.pkg.name,
-        href: typeHash(t.id),
-        selected: state.route.view === "type" && state.route.id === t.id
-      });
-      ys[c] += h + 26;
-    });
-    return nodes;
-  }
+  // Scene building, layout and routing live in ui.js (buildScene,
+  // layoutPackages, layoutTypes); the page only wires the result to the DOM.
 
   // ---------- drawing ----------
 
@@ -390,12 +296,23 @@
     scene.edges.forEach(function (e) {
       var a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) return;
-      var p = el("path", { d: edgePath(a, b), class: "edge" + (e.ref ? " ref" : "") });
+      var p = el("path", {
+        d: A.edgePath(a, b),
+        class: "edge" + (e.ref ? " ref" : "") + (e.violation ? " violation" : "") +
+          (e.call ? " call" + (e.dynamic ? " dynamic" : "") : "")
+      });
+      if (!e.ref) {
+        // A native tooltip: the edge means "to imports from".
+        p.appendChild(el("title", {}, (e.violation ? "违规依赖: " : "") + e.to + " → " + e.from));
+      }
       world.appendChild(p);
     });
 
     scene.nodes.forEach(function (n) {
-      var g = el("g", { class: "node" + (n.selected ? " selected" : ""), "data-id": n.id });
+      var g = el("g", {
+        class: "node" + (n.selected ? " selected" : "") + (n.dim ? " dim" : ""),
+        "data-id": n.id
+      });
       var fill = n.kind === "pkg" ? "#e0e7ff" : (n.sub === "interface" ? "#fef3c7" : "#dbeafe");
       var stroke = n.kind === "pkg" ? "#6366f1" : (n.sub === "interface" ? "#d97706" : "#3b82f6");
       g.appendChild(el("rect", {
@@ -423,22 +340,33 @@
           g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind" }, "… 还有 " + n.more + " 条"));
         }
       }
+      if (n.crap != null) {
+        // CRAP badge: a type is as risky as its worst method (2.3).
+        var lvl = A.crapLevel(n.crap, A.crapThresholds(state.model));
+        g.appendChild(el("rect", {
+          x: n.x + n.w - 54, y: n.y + 7, width: 46, height: 17, rx: 8,
+          fill: CRAP_FILL[lvl], class: "crap-badge"
+        }));
+        g.appendChild(el("text", {
+          x: n.x + n.w - 31, y: n.y + 19.5, class: "crap-text", fill: CRAP_INK[lvl], "text-anchor": "middle"
+        }, A.formatCrap(n.crap)));
+      }
+      if (n.kind === "type") {
+        // Fold toggle (3.2): collapsed cards keep their title only.
+        var fold = el("text", { x: n.x + n.w - 16, y: n.y + n.h - 8, class: "fold" }, n.folded ? "▸" : "▾");
+        fold.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          state.collapsed = A.toggleCollapsed(state.collapsed, n.id);
+          state.sceneKey = "";
+          render();
+        });
+        g.appendChild(fold);
+      }
       g.addEventListener("click", function (ev) { ev.stopPropagation(); go(n.href); });
       world.appendChild(g);
     });
 
     applyTransform();
-  }
-
-  function edgePath(a, b) {
-    var x1 = a.x + a.w, y1 = a.y + a.h / 2;
-    var x2 = b.x, y2 = b.y + b.h / 2;
-    if (x2 <= x1) {
-      var dx = Math.max(70, Math.abs(x1 - x2) / 2);
-      return "M" + x1 + "," + y1 + " C" + (x1 + dx) + "," + y1 + " " + (x2 - dx) + "," + y2 + " " + x2 + "," + y2;
-    }
-    var mx = (x1 + x2) / 2;
-    return "M" + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2;
   }
 
   function applyTransform() {
@@ -450,30 +378,14 @@
     if (!scene || !scene.nodes.length) {
       state.tx = 0; state.ty = 0; state.k = 1; applyTransform(); return;
     }
-    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    scene.nodes.forEach(function (n) {
-      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
-    });
-    var pad = 50;
-    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-    var bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
-    var W = svg.clientWidth || 1000, H = svg.clientHeight || 700;
-    var k = Math.min(1.25, Math.max(0.2, Math.min((W - 60) / bw, (H - 60) / bh)));
-    state.k = k;
-    state.tx = (W - bw * k) / 2 - minX * k;
-    state.ty = (H - bh * k) / 2 - minY * k;
+    var t = A.fitTransform(scene.nodes, svg.clientWidth, svg.clientHeight);
+    state.k = t.k;
+    state.tx = t.tx;
+    state.ty = t.ty;
     applyTransform();
   }
 
   // ---------- inspector ----------
-
-  function sourceHref(pos) {
-    var i = String(pos || "").lastIndexOf(":");
-    if (i < 0) return "";
-    var p = pos.slice(0, i), line = pos.slice(i + 1);
-    return "/source?path=" + encodeURIComponent(p) + "#L" + encodeURIComponent(line);
-  }
 
   function typeLink(id, label) {
     var t = idx.typeById.get(id);
@@ -508,6 +420,11 @@
   function renderHome() {
     var html = "<h2>模块总览</h2>";
     html += '<div class="meta">' + state.model.packages.length + " 个包 · 点击方框进入模块</div>";
+    if (state.model.metrics) {
+      var s = state.model.metrics;
+      html += '<div class="meta">CRAP 平均 ' + A.formatCrap(s.average) + " · 超标 " +
+        s.exceeded + "/" + s.total_funcs + " 个函数</div>";
+    }
     html += '<ul class="pkg-list">';
     state.model.packages.forEach(function (p) {
       html += "<li><a href=\"" + pkgHash(p.path) + "\"><span>" + esc(rel(p.path)) + "</span>" +
@@ -526,6 +443,16 @@
       html += "<h3>依赖</h3><div class=\"chips\">";
       p.imports.forEach(function (i) { html += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>"; });
       html += "</div>";
+      var bad = p.imports.filter(function (i) {
+        return A.layerViolation(state.model.layers, state.model.path, p.path, i);
+      });
+      if (bad.length) {
+        html += "<h3>违规依赖</h3><ul class=\"rel\">";
+        bad.forEach(function (i) {
+          html += "<li><span class=\"crap bad\">内层→外层</span> " + esc(rel(i)) + "</li>";
+        });
+        html += "</ul>";
+      }
     }
     html += "<h3>类型</h3>";
     var types = vis(p.types);
@@ -540,12 +467,15 @@
       html += "</tbody></table>";
     }
     var funcs = vis(p.funcs);
+    var metricsOn = !!state.model.metrics;
     html += "<h3>函数</h3>";
     if (!funcs.length) html += '<p class="empty">没有导出函数</p>';
     else {
-      html += "<table><thead><tr><th>函数</th><th>签名</th></tr></thead><tbody>";
+      html += "<table><thead><tr><th>函数</th><th>签名</th>" + (metricsOn ? "<th>CRAP</th>" : "") +
+        "</tr></thead><tbody>";
       funcs.forEach(function (f) {
-        html += '<tr><td class="name">' + esc(f.name) + '</td><td><code class="sig">' + esc(f.sig) + "</code></td></tr>";
+        html += '<tr><td class="name">' + esc(f.name) + '</td><td><code class="sig">' + esc(f.sig) +
+          "</code></td>" + (metricsOn ? crapCell(f) : "") + "</tr>";
       });
       html += "</tbody></table>";
     }
@@ -555,7 +485,8 @@
   function renderType(t) {
     var html = "<h2>" + esc(t.name) + ' <span class="badge ' +
       (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></h2>";
-    html += '<div class="meta">' + esc(rel(t.pkg.path)) + " · " + esc(t.pos) + "</div>";
+    html += '<div class="meta">' + esc(rel(t.pkg.path)) + " · " + esc(t.pos) +
+      (state.model.metrics ? " " + crapChip(A.typeCrap(t)) : "") + "</div>";
     if (t.doc) html += '<p class="doc">' + esc(t.doc) + "</p>";
 
     var fields = vis(t.fields), methods = vis(t.methods);
@@ -573,9 +504,11 @@
     html += "<h3>方法</h3>";
     if (!methods.length) html += '<p class="empty">没有方法</p>';
     else {
-      html += "<table><thead><tr><th>方法</th><th>签名</th></tr></thead><tbody>";
+      html += "<table><thead><tr><th>方法</th><th>签名</th>" + (state.model.metrics ? "<th>CRAP</th>" : "") +
+        "</tr></thead><tbody>";
       methods.forEach(function (m) {
-        html += '<tr><td class="name">' + esc(m.name) + '</td><td><code class="sig">' + esc(m.sig) + "</code></td></tr>";
+        html += '<tr><td class="name">' + esc(m.name) + '</td><td><code class="sig">' + esc(m.sig) +
+          "</code></td>" + (state.model.metrics ? crapCell(m) : "") + "</tr>";
       });
       html += "</tbody></table>";
     }
@@ -597,6 +530,28 @@
     }).join("") + "</ul>" : '<p class="empty">没有其他类型或函数引用它</p>') + "</div>";
     html += "</div>";
 
+    // 2.2: one hop of the call graph, straight from the model.
+    var calls = state.model.calls || [];
+    if (calls.length) {
+      var callsOut = calls.filter(function (c) { return A.ownerTypeID(c.from) === t.id; });
+      var calledBy = calls.filter(function (c) { return A.ownerTypeID(c.to) === t.id; });
+      var callItem = function (c) {
+        return "<li>" + esc(A.funcName(c.from)) + " → " + callLabel(c.to) +
+          (c.dynamic ? ' <span class="badge iface">动态</span>' : "") + "</li>";
+      };
+      var moreNote = function (list) {
+        return list.length > 12 ? '<p class="empty">还有 ' + (list.length - 12) + " 条</p>" : "";
+      };
+      html += "<h3>调用</h3><div class=\"rel\">";
+      html += "<div><b>调用了</b>" + (callsOut.length
+        ? "<ul>" + callsOut.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(callsOut)
+        : '<p class="empty">没有调用模块内函数</p>') + "</div>";
+      html += "<div><b>被调用</b>" + (calledBy.length
+        ? "<ul>" + calledBy.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(calledBy)
+        : '<p class="empty">没有被模块内函数调用</p>') + "</div>";
+      html += "</div>";
+    }
+
     var href = sourceHref(t.pos);
     if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
     side.innerHTML = html;
@@ -604,42 +559,52 @@
 
   function renderSearch() {
     if (!state.model) return;
-    var needle = state.q.toLowerCase();
-    var hits = [];
-    idx.typeById.forEach(function (t) {
-      if (!state.all && !t.exported) return;
-      var hay = [t.name, t.doc, (t.fields || []).map(function (f) { return f.name + " " + f.type; }).join(" ")].join(" ").toLowerCase();
-      if (hay.indexOf(needle) >= 0) {
-        hits.push({ kind: "类型", name: t.pkg.name + "." + t.name, href: typeHash(t.id), doc: t.doc });
-      }
-    });
-    state.model.packages.forEach(function (p) {
-      p.funcs.forEach(function (f) {
-        if (!state.all && !f.exported) return;
-        if ((f.name + " " + f.doc).toLowerCase().indexOf(needle) >= 0) {
-          hits.push({ kind: "函数", name: p.name + "." + f.name, href: pkgHash(p.path), doc: f.doc });
-        }
-      });
-    });
-    var html = "<h2>搜索</h2><div class=\"meta\">“" + esc(state.q) + "” · " + hits.length + " 个结果</div>";
+    var hits = A.searchHits(state.model, state.q, state.all);
+    state.hits = hits;
+    if (state.hitIndex >= hits.length) state.hitIndex = 0;
+
+    var html = "<h2>搜索</h2><div class=\"meta\">“" + esc(state.q) + "” · " + hits.length + " 个结果";
+    if (hits.length) html += " · ↑↓ 选择 · Enter 打开";
+    html += "</div>";
     if (!hits.length) html += '<p class="empty">没有匹配</p>';
     else {
       html += "<table><thead><tr><th>类型</th><th>名字</th></tr></thead><tbody>";
-      hits.slice(0, 80).forEach(function (h) {
-        html += "<tr><td>" + esc(h.kind) + '</td><td class="name"><a href="' + h.href + '">' + esc(h.name) + "</a></td></tr>";
+      hits.slice(0, 80).forEach(function (h, i) {
+        html += "<tr" + (i === state.hitIndex ? ' class="sel"' : "") + "><td>" + esc(h.kind) +
+          '</td><td class="name"><a href="' + h.href + '">' + A.highlight(h.name, state.q) + "</a></td></tr>";
       });
       html += "</tbody></table>";
     }
     side.innerHTML = html;
   }
 
+  function moveHit(delta) {
+    if (!state.hits || !state.hits.length) return;
+    state.hitIndex = (state.hitIndex + delta + state.hits.length) % state.hits.length;
+    renderSearch();
+  }
+
+  function openHit() {
+    var h = state.hits && state.hits[state.hitIndex];
+    if (h) go(h.href);
+  }
+
   // ---------- render loop ----------
 
   function render() {
     if (!state.model) return;
-    state.route = parseHash();
+    state.route = A.parseHash(location.hash);
+    var isType = state.route.view === "type";
+    if (!isType) state.focus = false; // focus only means something for a type
     renderCrumb();
-    var scene = buildScene();
+    var scene = A.buildScene(state.model, idx, state.route, state.all, {
+      focus: state.focus ? state.route.id : "",
+      collapsed: state.collapsed,
+      declutter: state.declutter,
+      layout: state.layout,
+      calls: state.calls,
+      query: state.q
+    });
     if (!scene) {
       go("#/");
       return;
@@ -647,10 +612,28 @@
     state.scene = scene;
     draw(scene);
     renderSide(scene);
+    updateChrome();
     if (state.sceneKey !== scene.key) {
       state.sceneKey = scene.key;
       fit(scene);
     }
+  }
+
+  // updateChrome reflects view state (3.2) in the toolbar and the hint line.
+  function updateChrome() {
+    var focusBtn = document.getElementById("focus");
+    focusBtn.disabled = state.route.view !== "type";
+    if (state.focus) focusBtn.classList.add("on");
+    else focusBtn.classList.remove("on");
+
+    var isType = state.route.view === "type";
+    var hint = document.getElementById("hint");
+    hint.textContent =
+      (state.focus && isType ? "已聚焦：只显示一跳邻居 · Esc 退出 · " : "") +
+      "拖拽平移 · 滚轮缩放 · 点击方框下钻" +
+      (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
+      (state.calls ? " · 蓝线 = 调用" : "") +
+      " · ▾ 折叠成员";
   }
 
   // ---------- input ----------
@@ -687,6 +670,26 @@
 
   document.getElementById("fit").addEventListener("click", function () { fit(state.scene); });
   document.getElementById("reload").addEventListener("click", function () { boot(); });
+  document.getElementById("focus").addEventListener("click", function () {
+    state.focus = !state.focus;
+    state.sceneKey = "";
+    render();
+  });
+  document.getElementById("declutter").addEventListener("change", function (e) {
+    state.declutter = e.target.checked;
+    state.sceneKey = "";
+    render();
+  });
+  document.getElementById("layout").addEventListener("change", function (e) {
+    state.layout = e.target.value;
+    state.sceneKey = "";
+    render();
+  });
+  document.getElementById("calls").addEventListener("change", function (e) {
+    state.calls = e.target.checked;
+    state.sceneKey = "";
+    render();
+  });
   allEl.addEventListener("change", function () {
     state.all = allEl.checked;
     updateStatus();
@@ -695,18 +698,29 @@
   });
   qEl.addEventListener("input", function () {
     state.q = qEl.value.trim();
+    state.hitIndex = 0;
     if (!state.model) return;
-    if (state.q) renderSearch();
-    else renderSide(state.scene);
+    // Re-render the scene too: the canvas fades whatever does not match.
+    render();
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "/" && document.activeElement !== qEl) { e.preventDefault(); qEl.focus(); }
+    if (state.q && e.key === "ArrowDown") { e.preventDefault(); moveHit(1); return; }
+    if (state.q && e.key === "ArrowUp") { e.preventDefault(); moveHit(-1); return; }
+    if (state.q && e.key === "Enter") { e.preventDefault(); openHit(); return; }
     if (e.key === "Escape" && document.activeElement === qEl) {
-      qEl.value = ""; state.q = ""; qEl.blur(); renderSide(state.scene);
+      qEl.value = ""; state.q = ""; state.hits = []; qEl.blur(); render();
+      return;
+    }
+    if (e.key === "Escape" && state.focus) {
+      state.focus = false;
+      state.sceneKey = "";
+      render();
     }
   });
   window.addEventListener("hashchange", function () {
     qEl.value = ""; state.q = "";
+    state.hits = []; state.hitIndex = 0;
     render();
   });
   window.addEventListener("resize", function () { fit(state.scene); });

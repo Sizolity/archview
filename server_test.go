@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -20,12 +21,14 @@ func TestServerRoutes(t *testing.T) {
 
 	s := &Server{
 		Root: root,
-		UI:   []byte("<!doctype html><html>ui</html>"),
+		UI:   []byte("<!doctype html><html>ui<script src=\"/ui.js\"></script></html>"),
+		JS:   []byte("window.ArchView = {esc: function () {}};"),
 		Load: func(context.Context) (*Module, error) {
 			return &Module{
 				Path:     "example.com/mod",
 				Root:     root,
 				Packages: []*Package{{Path: "example.com/mod/a", Name: "a"}},
+				Warnings: []string{"类型检查已跳过"},
 			}, nil
 		},
 	}
@@ -49,6 +52,9 @@ func TestServerRoutes(t *testing.T) {
 	if code, body := get("/"); code != http.StatusOK || !strings.Contains(body, "ui") {
 		t.Fatalf("GET / = %d %q", code, body)
 	}
+	if code, body := get("/ui.js"); code != http.StatusOK || !strings.Contains(body, "ArchView") {
+		t.Fatalf("GET /ui.js = %d %q", code, body)
+	}
 	if code, body := get("/healthz"); code != http.StatusOK || !strings.Contains(body, "ok") {
 		t.Fatalf("GET /healthz = %d %q", code, body)
 	}
@@ -64,6 +70,10 @@ func TestServerRoutes(t *testing.T) {
 	if m.Path != "example.com/mod" || len(m.Packages) != 1 {
 		t.Fatalf("model = %+v", m)
 	}
+	// A degraded type check must reach the browser, not just the log.
+	if len(m.Warnings) != 1 || m.Warnings[0] != "类型检查已跳过" {
+		t.Fatalf("warnings = %v", m.Warnings)
+	}
 
 	code, body = get("/source?path=a.go")
 	if code != http.StatusOK || !strings.Contains(body, "package a") || !strings.Contains(body, `id="L1"`) {
@@ -74,5 +84,70 @@ func TestServerRoutes(t *testing.T) {
 		if code, _ := get(path); code != http.StatusBadRequest {
 			t.Errorf("GET %s = %d, want 400", path, code)
 		}
+	}
+}
+
+// sourceServer starts a server rooted at dir with a stub loader, so the
+// source endpoint can be tested without a real module scan.
+func sourceServer(t *testing.T, dir string) *httptest.Server {
+	t.Helper()
+	s := &Server{
+		Root: dir,
+		UI:   []byte("<!doctype html><html>ui</html>"),
+		JS:   []byte("window.ArchView = {};"),
+		Load: func(context.Context) (*Module, error) {
+			return &Module{Path: "example.com/mod", Root: dir}, nil
+		},
+	}
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func fetchText(t *testing.T, ts *httptest.Server, path string) (int, string) {
+	t.Helper()
+	resp, err := ts.Client().Get(ts.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(b)
+}
+
+func TestSourceRejectsOversizeFile(t *testing.T) {
+	dir := t.TempDir()
+	big := bytes.Repeat([]byte("a"), 2<<20+1)
+	if err := os.WriteFile(filepath.Join(dir, "big.go"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts := sourceServer(t, dir)
+
+	code, body := fetchText(t, ts, "/source?path=big.go")
+	if code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("GET /source big.go = %d, want 413 (%q)", code, body)
+	}
+}
+
+func TestSourceEscapesInvalidUTF8(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte("package a\n// \xff\xfe <b>raw</b>\n")
+	if err := os.WriteFile(filepath.Join(dir, "bad.go"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts := sourceServer(t, dir)
+
+	code, body := fetchText(t, ts, "/source?path=bad.go")
+	if code != http.StatusOK {
+		t.Fatalf("GET /source bad.go = %d, want 200", code)
+	}
+	if strings.Contains(body, "<b>raw</b>") {
+		t.Fatalf("source markup leaked unescaped: %q", body)
+	}
+	if !strings.Contains(body, "&lt;b&gt;raw&lt;/b&gt;") {
+		t.Fatalf("expected escaped markup, got %q", body)
 	}
 }

@@ -17,11 +17,17 @@ import (
 	"strings"
 )
 
-// Module is the whole JSON payload the browser reads. Root stays server-side.
+// Module is the whole JSON payload the browser reads.
 type Module struct {
-	Path     string     `json:"path"`
-	Packages []*Package `json:"packages"`
-	Root     string     `json:"-"`
+	Path     string          `json:"path"`
+	Root     string          `json:"root,omitempty"`
+	Editor   string          `json:"editor,omitempty"`
+	Layers   [][]string      `json:"layers,omitempty"`
+	Metrics  *MetricsSummary `json:"metrics,omitempty"`
+	Packages []*Package      `json:"packages"`
+	Edges    []Edge          `json:"edges,omitempty"`
+	Calls    []Call          `json:"calls,omitempty"`
+	Warnings []string        `json:"warnings,omitempty"`
 }
 
 // Package is one Go package with its exported and unexported declarations.
@@ -61,23 +67,27 @@ type FieldInfo struct {
 
 // MethodInfo is a function with a receiver.
 type MethodInfo struct {
+	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Sig      string   `json:"sig"`
 	Doc      string   `json:"doc,omitempty"`
 	Pos      string   `json:"pos"`
 	Exported bool     `json:"exported"`
 	Refs     []string `json:"refs,omitempty"`
+	Metrics  *Metrics `json:"metrics,omitempty"`
 	raw      *ast.FuncType
 }
 
 // FuncInfo is a package-level function.
 type FuncInfo struct {
+	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Sig      string   `json:"sig"`
 	Doc      string   `json:"doc,omitempty"`
 	Pos      string   `json:"pos"`
 	Exported bool     `json:"exported"`
 	Refs     []string `json:"refs,omitempty"`
+	Metrics  *Metrics `json:"metrics,omitempty"`
 	raw      *ast.FuncType
 }
 
@@ -99,46 +109,87 @@ type listed struct {
 }
 
 // Load scans the module in the current working directory.
-func Load(ctx context.Context) (*Module, error) {
-	modulePath, root, err := moduleInfo(ctx)
+func Load(ctx context.Context) (*Module, error) { return loadWith(ctx, "", nil) }
+
+// load scans the module rooted at dir; "" means the process working directory.
+// Tests point it at a fixture so they never depend on where go test runs.
+func load(ctx context.Context, dir string) (*Module, error) { return loadWith(ctx, dir, nil) }
+
+// loadWith scans dir with the config's excludes and layers applied.
+func loadWith(ctx context.Context, dir string, cfg *Config) (*Module, error) {
+	modulePath, root, err := moduleInfo(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
-	list, err := listPackages(ctx)
+	list, err := listPackages(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
 
 	fset := token.NewFileSet()
 	m := &Module{Path: modulePath, Root: root}
+	if cfg != nil {
+		list = filterPackages(list, modulePath, cfg.Exclude)
+		m.Layers = cfg.Layers
+		if len(list) == 0 {
+			m.Warnings = append(m.Warnings, "exclude 把模块里的所有包都过滤掉了")
+		}
+	}
+	asts := make(map[string][]*ast.File, len(list))
 	for _, lp := range list {
-		p, err := parsePackage(fset, root, modulePath, lp)
+		files, err := parseFiles(fset, lp)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", lp.Path, err)
 		}
-		m.Packages = append(m.Packages, p)
+		asts[lp.Path] = files
+		m.Packages = append(m.Packages, buildPackage(fset, root, modulePath, lp, files))
 	}
 	sort.Slice(m.Packages, func(i, j int) bool { return m.Packages[i].Path < m.Packages[j].Path })
 
 	ix := buildIndex(m.Packages)
+	var edges []Edge
 	for _, p := range m.Packages {
 		for _, t := range p.Types {
 			for i := range t.Fields {
 				t.Fields[i].Refs = resolve(t.Fields[i].raw, p.Path, ix)
+				edges = append(edges, useEdges(t.ID, t.Fields[i].Refs)...)
 			}
 			for i := range t.Methods {
 				t.Methods[i].Refs = resolveSig(t.Methods[i].raw, p.Path, ix)
+				edges = append(edges, useEdges(t.ID, t.Methods[i].Refs)...)
 			}
 		}
 		for _, f := range p.Funcs {
 			f.Refs = resolveSig(f.raw, p.Path, ix)
 		}
 	}
+
+	checked, warnings := typeCheck(ctx, fset, dir, list, asts)
+	m.Warnings = warnings
+	if len(checked) > 0 {
+		pkgs := make(map[string]*gotypes.Package, len(checked))
+		for path, c := range checked {
+			pkgs[path] = c.pkg
+		}
+		edges = append(edges, relations(pkgs, modelIDs(m.Packages))...)
+		m.Calls = collectCalls(checked)
+	}
+	m.Edges = normalizeEdges(edges)
 	return m, nil
 }
 
-func moduleInfo(ctx context.Context) (path, root string, err error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Path}}|{{.Dir}}")
+// goCommand builds a go command that runs in dir; "" means the process working
+// directory.
+func goCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "go", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	return cmd
+}
+
+func moduleInfo(ctx context.Context, dir string) (path, root string, err error) {
+	cmd := goCommand(ctx, dir, "list", "-m", "-f", "{{.Path}}|{{.Dir}}")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -152,8 +203,8 @@ func moduleInfo(ctx context.Context) (path, root string, err error) {
 	return parts[0], parts[1], nil
 }
 
-func listPackages(ctx context.Context) ([]listed, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-e", "-f",
+func listPackages(ctx context.Context, dir string) ([]listed, error) {
+	cmd := goCommand(ctx, dir, "list", "-e", "-f",
 		`{{.ImportPath}}|{{.Name}}|{{.Dir}}|{{join .GoFiles ","}}|{{join .Imports " "}}`, "./...")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -225,24 +276,37 @@ type builder struct {
 }
 
 func parsePackage(fset *token.FileSet, root, module string, lp listed) (*Package, error) {
+	files, err := parseFiles(fset, lp)
+	if err != nil {
+		return nil, err
+	}
+	return buildPackage(fset, root, module, lp, files), nil
+}
+
+// parseFiles parses a package's files in path order, so the model is built the
+// same way on every run. Load keeps the ASTs for the type checker.
+func parseFiles(fset *token.FileSet, lp listed) ([]*ast.File, error) {
 	paths, err := packageFiles(lp)
 	if err != nil {
 		return nil, err
 	}
-	files := map[string]*ast.File{}
+	files := make([]*ast.File, 0, len(paths))
 	for _, path := range paths {
 		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
 			return nil, err
 		}
 		if f.Name.Name == lp.Name {
-			files[path] = f
+			files = append(files, f)
 		}
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("package %s not found in %s", lp.Name, lp.Dir)
 	}
+	return files, nil
+}
 
+func buildPackage(fset *token.FileSet, root, module string, lp listed, files []*ast.File) *Package {
 	p := &Package{Path: lp.Path, Name: lp.Name}
 	for _, imp := range lp.Imports {
 		if strings.HasPrefix(imp, module+"/") {
@@ -254,28 +318,26 @@ func parsePackage(fset *token.FileSet, root, module string, lp listed) (*Package
 	b := &builder{fset: fset, root: root, pkgPath: lp.Path, rootDoc: p,
 		types: map[string]*TypeInfo{}, methods: map[string][]MethodInfo{}}
 
-	names := make([]string, 0, len(files))
-	for n := range files {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		if p.Doc == "" && files[n].Doc != nil {
-			p.Doc = firstPara(files[n].Doc.Text())
+	for _, f := range files {
+		if p.Doc == "" && f.Doc != nil {
+			p.Doc = firstPara(f.Doc.Text())
 		}
 	}
-	for _, n := range names {
-		b.parseFile(files[n])
+	for _, f := range files {
+		b.parseFile(f)
 	}
 	for name, ms := range b.methods {
 		if t, ok := b.types[name]; ok {
+			for i := range ms {
+				ms[i].ID = methodID(lp.Path, name, ms[i].Name)
+			}
 			sort.Slice(ms, func(i, j int) bool { return ms[i].Name < ms[j].Name })
 			t.Methods = ms
 		}
 	}
 	sort.Slice(p.Types, func(i, j int) bool { return p.Types[i].Name < p.Types[j].Name })
 	sort.Slice(p.Funcs, func(i, j int) bool { return p.Funcs[i].Name < p.Funcs[j].Name })
-	return p, nil
+	return p
 }
 
 func (b *builder) parseFile(f *ast.File) {
@@ -361,6 +423,7 @@ func (b *builder) parseFile(f *ast.File) {
 				continue
 			}
 			b.rootDoc.Funcs = append(b.rootDoc.Funcs, &FuncInfo{
+				ID:       funcID(b.pkgPath, dd.Name.Name),
 				Name:     dd.Name.Name,
 				Sig:      funcSig(dd.Type),
 				Doc:      firstPara(commentText(dd.Doc)),

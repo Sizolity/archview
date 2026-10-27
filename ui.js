@@ -1,0 +1,791 @@
+// ui.js — the pure half of the browser UI: routing, layout, scene building and
+// formatting. It touches neither the DOM nor fetch(), so `node --test` can
+// cover it; ui.html keeps only the parts that need a document.
+//
+// The file is served as /ui.js, inlined into the single-file export, and
+// loaded by node --test through module.exports.
+(function (root, factory) {
+  "use strict";
+  var api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  if (root) root.ArchView = api;
+})(typeof globalThis === "object" ? globalThis : this, function () {
+  "use strict";
+
+  var COLS = 3;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function cut(s, n) {
+    s = String(s == null ? "" : s);
+    return s.length <= n ? s : s.slice(0, n - 1) + "…";
+  }
+
+  function short(p) {
+    return String(p).split("/").pop();
+  }
+
+  // relPath strips the module prefix so the UI shows "internal/wiki" rather
+  // than the full import path.
+  function relPath(modelPath, p) {
+    if (!modelPath) return p;
+    var pre = modelPath + "/";
+    return p.indexOf(pre) === 0 ? p.slice(pre.length) : p;
+  }
+
+  function visible(list, all) {
+    return (list || []).filter(function (x) { return all || x.exported; });
+  }
+
+  // ---------- layers ----------
+
+  // pkgRel is the module-relative path, "" for the root package.
+  function pkgRel(modelPath, pkgPath) {
+    if (!modelPath || pkgPath === modelPath) return "";
+    return relPath(modelPath, pkgPath);
+  }
+
+  function normalizeLayers(layers) {
+    return (layers || []).map(function (layer) {
+      return (layer || []).map(function (name) {
+        return String(name).replace(/^\/+/, "").replace(/\/+$/, "");
+      }).filter(Boolean);
+    });
+  }
+
+  // layerOf returns the innermost layer a package belongs to, or -1. A layer
+  // matches a whole path segment, so "web" hits "internal/web" but not
+  // "internal/webhook".
+  function layerOf(layers, modelPath, pkgPath) {
+    var rel = pkgRel(modelPath, pkgPath);
+    if (!rel) return -1;
+    var segs = rel.split("/");
+    var best = -1;
+    normalizeLayers(layers).forEach(function (layer, i) {
+      for (var k = 0; k < layer.length; k++) {
+        if (layer[k] === rel || segs.indexOf(layer[k]) >= 0) {
+          if (best === -1 || i < best) best = i;
+          return;
+        }
+      }
+    });
+    return best;
+  }
+
+  // layerViolation reports an inner layer depending on an outer one: layers
+  // are listed inner first, so a dependency from a lower index to a higher one
+  // points the wrong way.
+  function layerViolation(layers, modelPath, from, to) {
+    if (!layers || !layers.length) return false;
+    var a = layerOf(layers, modelPath, from);
+    var b = layerOf(layers, modelPath, to);
+    if (a < 0 || b < 0 || a === b) return false;
+    return a < b;
+  }
+
+  // ---------- routing ----------
+
+  function parseHash(hash) {
+    var h = hash || "#/";
+    var parts = h.slice(2).split("/");
+    if (parts[0] === "pkg" && parts[1]) {
+      return { view: "pkg", path: decodeURIComponent(parts.slice(1).join("/")) };
+    }
+    if (parts[0] === "type" && parts[1]) {
+      return { view: "type", id: decodeURIComponent(parts.slice(1).join("/")) };
+    }
+    return { view: "home" };
+  }
+
+  function pkgHash(path) { return "#/pkg/" + encodeURIComponent(path); }
+  function typeHash(id) { return "#/type/" + encodeURIComponent(id); }
+
+  function parsePos(pos) {
+    var s = String(pos == null ? "" : pos);
+    var i = s.lastIndexOf(":");
+    if (i < 0) return null;
+    return { file: s.slice(0, i), line: Number(s.slice(i + 1)) || 0 };
+  }
+
+  function sourceHref(pos) {
+    var p = parsePos(pos);
+    if (!p) return "";
+    return "/source?path=" + encodeURIComponent(p.file) + "#L" + encodeURIComponent(p.line);
+  }
+
+  // toAbs joins the module root and a model-relative file, normalising
+  // separators so Windows and Unix roots build the same string.
+  function toAbs(root, file) {
+    var r = String(root || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    var f = String(file || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!r) return f;
+    if (!f) return r;
+    return r + "/" + f;
+  }
+
+  // pathForURL turns an absolute path into the form a URL expects: Windows
+  // "E:/x" becomes "/E:/x", Unix paths already start with a slash.
+  function pathForURL(abs) {
+    var p = String(abs || "").replace(/\\/g, "/");
+    return p.charAt(0) === "/" ? p : "/" + p;
+  }
+
+  // editorHref picks the jump target for a declaration. "source" keeps the
+  // built-in page, an unknown mode falls back to it, and "none" hides the link.
+  function editorHref(mode, root, pos) {
+    var p = parsePos(pos);
+    if (!p) return "";
+    switch (mode) {
+      case "vscode":
+        return "vscode://file" + pathForURL(toAbs(root, p.file)) + ":" + p.line + ":1";
+      case "goland":
+        return "goland://open?file=" + encodeURIComponent(toAbs(root, p.file)) + "&line=" + p.line;
+      case "file":
+        return "file://" + pathForURL(toAbs(root, p.file));
+      case "none":
+        return "";
+      default:
+        return sourceHref(pos);
+    }
+  }
+
+  // ownerTypeID maps "<pkg>#<Type>.<Method>" to "<pkg>#<Type>"; a package-level
+  // function has no owner and yields "".
+  function ownerTypeID(id) {
+    var s = String(id || "");
+    var hash = s.lastIndexOf("#");
+    if (hash < 0) return "";
+    var rest = s.slice(hash + 1);
+    var dot = rest.indexOf(".");
+    if (dot <= 0) return "";
+    return s.slice(0, hash + 1) + rest.slice(0, dot);
+  }
+
+  // funcName is the readable half of a function ID: "Server.source".
+  function funcName(id) {
+    var s = String(id || "");
+    var hash = s.lastIndexOf("#");
+    return hash < 0 ? s : s.slice(hash + 1);
+  }
+
+  // ---------- search ----------
+
+  // searchHits scans names, signatures, docs and member lists. Name matches
+  // sort above doc matches, so "Resolve" finds wiki.ResolveLink before prose.
+  function searchHits(model, query, all) {
+    var needle = String(query || "").toLowerCase();
+    var hits = [];
+    if (!needle) return hits;
+
+    function add(kind, name, href, doc, typeId, hay) {
+      if (hay.toLowerCase().indexOf(needle) < 0) return;
+      hits.push({
+        kind: kind,
+        name: name,
+        href: href,
+        doc: doc || "",
+        typeId: typeId || "",
+        nameMatch: name.toLowerCase().indexOf(needle) >= 0
+      });
+    }
+
+    model.packages.forEach(function (p) {
+      p.types.forEach(function (t) {
+        if (!all && !t.exported) return;
+        add("类型", p.name + "." + t.name, typeHash(t.id), t.doc, t.id,
+          [t.name, t.doc, (t.fields || []).map(function (f) { return f.name + " " + f.type; }).join(" ")].join(" "));
+        (t.methods || []).forEach(function (m) {
+          if (!all && !m.exported) return;
+          add("方法", t.name + "." + m.name, typeHash(t.id), m.doc, t.id,
+            [m.name, m.sig, m.doc].join(" "));
+        });
+      });
+      (p.funcs || []).forEach(function (f) {
+        if (!all && !f.exported) return;
+        add("函数", p.name + "." + f.name, pkgHash(p.path), f.doc, "",
+          [f.name, f.sig, f.doc].join(" "));
+      });
+      (p.consts || []).forEach(function (c) {
+        if (!all && !c.exported) return;
+        add("常量", p.name + "." + c.name, pkgHash(p.path), "", "",
+          [c.name, c.type, c.value].join(" "));
+      });
+      (p.vars || []).forEach(function (v) {
+        if (!all && !v.exported) return;
+        add("变量", p.name + "." + v.name, pkgHash(p.path), "", "",
+          [v.name, v.type].join(" "));
+      });
+    });
+
+    hits.sort(function (a, b) {
+      if (a.nameMatch !== b.nameMatch) return a.nameMatch ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return hits;
+  }
+
+  // matchTypeIDs is the set of type nodes a hit list touches, used to fade
+  // everything else on the canvas.
+  function matchTypeIDs(hits) {
+    var set = {};
+    (hits || []).forEach(function (h) {
+      if (h.typeId) set[h.typeId] = true;
+    });
+    return set;
+  }
+
+  // highlight escapes text and wraps the first match in <mark>.
+  function highlight(text, query) {
+    var s = String(text == null ? "" : text);
+    var needle = String(query || "");
+    if (!needle) return esc(s);
+    var i = s.toLowerCase().indexOf(needle.toLowerCase());
+    if (i < 0) return esc(s);
+    return esc(s.slice(0, i)) + "<mark>" + esc(s.slice(i, i + needle.length)) + "</mark>" +
+      esc(s.slice(i + needle.length));
+  }
+
+  // ---------- indexing ----------
+
+  // indexModel fills the defaults the rest of the UI assumes and returns the
+  // lookup tables. It annotates the model in place (t.pkg) on purpose: the
+  // inspector reads the back-reference.
+  function indexModel(model) {
+    var pkgByPath = new Map();
+    var typeById = new Map();
+    var incoming = new Map();
+    var funcById = new Map();
+
+    model.packages.forEach(function (p) {
+      p.types = p.types || [];
+      p.funcs = p.funcs || [];
+      p.consts = p.consts || [];
+      p.vars = p.vars || [];
+      p.imports = p.imports || [];
+      pkgByPath.set(p.path, p);
+      p.types.forEach(function (t) {
+        t.pkg = p;
+        typeById.set(t.id, t);
+        (t.methods || []).forEach(function (m) {
+          if (!m.id) return;
+          funcById.set(m.id, { id: m.id, name: t.name + "." + m.name, owner: t.id, pkg: p });
+        });
+      });
+      p.funcs.forEach(function (f) {
+        if (!f.id) return;
+        funcById.set(f.id, { id: f.id, name: f.name, owner: "", pkg: p });
+      });
+    });
+
+    function add(target, from, label) {
+      if (!incoming.has(target)) incoming.set(target, []);
+      var list = incoming.get(target);
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].from === from && list[i].label === label) return;
+      }
+      list.push({ from: from, label: label });
+    }
+
+    typeById.forEach(function (t) {
+      (t.fields || []).forEach(function (f) {
+        (f.refs || []).forEach(function (r) { add(r, t.id, "字段 " + f.name); });
+      });
+      (t.methods || []).forEach(function (m) {
+        (m.refs || []).forEach(function (r) { add(r, t.id, "方法 " + m.name); });
+      });
+    });
+    model.packages.forEach(function (p) {
+      p.funcs.forEach(function (f) {
+        (f.refs || []).forEach(function (r) { add(r, p.path, "函数 " + f.name); });
+      });
+    });
+
+    return { pkgByPath: pkgByPath, typeById: typeById, incoming: incoming, funcById: funcById };
+  }
+
+  // ---------- layout ----------
+
+  // layoutPackages puts a package in the column of its import depth: a
+  // package sits one column right of everything it imports.
+  function layoutPackages(pkgs, pkgByPath, opts) {
+    opts = opts || {};
+    var all = !!opts.all;
+    var modelPath = opts.modelPath || "";
+
+    var depth = new Map();
+    pkgs.forEach(function (p) { depth.set(p.path, 0); });
+    for (var round = 0; round < pkgs.length; round++) {
+      pkgs.forEach(function (p) {
+        (p.imports || []).forEach(function (imp) {
+          var q = pkgByPath.get(imp);
+          if (!q) return;
+          depth.set(p.path, Math.max(depth.get(p.path), depth.get(q.path) + 1));
+        });
+      });
+    }
+
+    var cols = new Map();
+    pkgs.forEach(function (p) {
+      var d = depth.get(p.path);
+      if (!cols.has(d)) cols.set(d, []);
+      cols.get(d).push(p);
+    });
+
+    var nodes = [];
+    var ds = Array.from(cols.keys()).sort(function (a, b) { return a - b; });
+    ds.forEach(function (d) {
+      var list = cols.get(d).slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
+      list.forEach(function (p, i) {
+        nodes.push({
+          id: p.path,
+          kind: "pkg",
+          x: 40 + d * 320,
+          y: 40 + i * 96,
+          w: 240,
+          h: 68,
+          title: short(p.path),
+          sub: relPath(modelPath, p.path),
+          lines: [visible(p.types, all).length + " 类型 · " + visible(p.funcs, all).length + " 函数"],
+          href: pkgHash(p.path),
+          selected: false
+        });
+      });
+    });
+    return nodes;
+  }
+
+  function typeRows(t, all) {
+    var rows = [];
+    visible(t.fields, all).forEach(function (f) {
+      rows.push((f.exported ? "+ " : "- ") + (f.embedded ? f.type : f.name + ": " + f.type));
+    });
+    visible(t.methods, all).forEach(function (m) {
+      rows.push((m.exported ? "+ " : "- ") + m.name + m.sig);
+    });
+    return rows;
+  }
+
+  // ---------- view filters ----------
+
+  // toggleCollapsed folds or unfolds one card, returning a new list so the
+  // caller keeps plain state.
+  function toggleCollapsed(list, id) {
+    var out = (list || []).slice();
+    var i = out.indexOf(id);
+    if (i >= 0) out.splice(i, 1);
+    else out.push(id);
+    return out;
+  }
+
+  // focusScene keeps the selected node and its one-hop neighbours. Nodes and
+  // edges are hidden, never removed from the model.
+  function focusScene(scene, id) {
+    if (!scene || !id || scene.kind !== "types") return scene;
+    var keep = {};
+    keep[id] = true;
+    (scene.edges || []).forEach(function (e) {
+      if (e.from === id) keep[e.to] = true;
+      if (e.to === id) keep[e.from] = true;
+    });
+    var nodes = scene.nodes.filter(function (n) { return !!keep[n.id]; });
+    var present = {};
+    nodes.forEach(function (n) { present[n.id] = true; });
+    return {
+      kind: scene.kind,
+      key: scene.key + ":focus:" + id,
+      nodes: nodes,
+      edges: (scene.edges || []).filter(function (e) { return present[e.from] && present[e.to]; }),
+      pkg: scene.pkg,
+      selected: scene.selected
+    };
+  }
+
+  // declutterScene hides edges that do not touch the selected node.
+  function declutterScene(scene, selected) {
+    if (!scene || scene.kind !== "types" || !selected) return scene;
+    return {
+      kind: scene.kind,
+      key: scene.key,
+      nodes: scene.nodes,
+      edges: (scene.edges || []).filter(function (e) {
+        return e.from === selected || e.to === selected;
+      }),
+      pkg: scene.pkg,
+      selected: scene.selected
+    };
+  }
+
+  // ---------- metrics ----------
+
+  // Bands follow go-crap's default threshold of 30; 5 is where a function is
+  // still cheap enough to leave alone.
+  var CRAP_WARN = 5;
+  var CRAP_BAD = 30;
+
+  function crapLevel(v, thresholds) {
+    if (v == null || !isFinite(v)) return "";
+    var warn = CRAP_WARN, bad = CRAP_BAD;
+    if (thresholds && thresholds.length === 2 && isFinite(thresholds[0]) && isFinite(thresholds[1])) {
+      warn = thresholds[0];
+      bad = thresholds[1];
+    }
+    if (v > bad) return "bad";
+    if (v > warn) return "warn";
+    return "ok";
+  }
+
+  // crapThresholds returns [warn, bad] from the config file, or the defaults.
+  function crapThresholds(model) {
+    var t = model && model.metrics && model.metrics.thresholds;
+    if (t && t.length === 2 && isFinite(t[0]) && isFinite(t[1])) return [t[0], t[1]];
+    return [CRAP_WARN, CRAP_BAD];
+  }
+
+  function formatCrap(v) {
+    if (v == null || !isFinite(v)) return "";
+    return Number(v).toFixed(1);
+  }
+
+  // typeCrap is the worst method score: a type is as risky as its worst member.
+  function typeCrap(t) {
+    var worst = null;
+    (t.methods || []).forEach(function (m) {
+      if (!m.metrics) return;
+      if (worst == null || m.metrics.crap > worst) worst = m.metrics.crap;
+    });
+    return worst;
+  }
+
+  // ---------- type layout ----------
+
+  var LAYOUTS = ["layer", "kind"];
+  var CARD_W = 290;
+  var PER_ROW = 4;
+
+  function layoutMode(v) {
+    return LAYOUTS.indexOf(v) >= 0 ? v : "layer";
+  }
+
+  // rankTypes walks the edges until the ranks stop moving: a type that is used
+  // by another sits above it, so dependencies end up at the bottom. Cycles are
+  // bounded by the number of types.
+  function rankTypes(types, edges) {
+    var rank = {};
+    types.forEach(function (t) { rank[t.id] = 0; });
+    for (var round = 0; round < types.length; round++) {
+      var changed = false;
+      edges.forEach(function (e) {
+        if (!(e.from in rank) || !(e.to in rank)) return;
+        if (rank[e.to] < rank[e.from] + 1) {
+          rank[e.to] = rank[e.from] + 1;
+          changed = true;
+        }
+      });
+      if (!changed) break;
+    }
+    return rank;
+  }
+
+  function typeCard(t, h, rows, more, folded) {
+    return { t: t, h: h, rows: rows, more: more, folded: folded };
+  }
+
+  // layoutTypes places the type cards. Two deterministic modes:
+  //
+  //   layer (default) — one band per dependency depth, users on top,
+  //   dependencies below, four cards per line;
+  //   kind — the old grid, grouped struct → interface → type.
+  //
+  // Folded cards keep only their title, which is a view state: the model is
+  // untouched.
+  function layoutTypes(pkg, types, opts) {
+    opts = opts || {};
+    var all = !!opts.all;
+    var selected = opts.selected || null;
+    var collapsed = opts.collapsed || [];
+    var declutter = !!opts.declutter;
+    var mode = layoutMode(opts.layout);
+    var edges = opts.edges || [];
+
+    var cards = types.map(function (t) {
+      var folded = declutter || collapsed.indexOf(t.id) >= 0;
+      var rows = folded ? [] : typeRows(t, all);
+      var shown = rows.slice(0, 7);
+      var more = rows.length - shown.length;
+      var h = folded ? 44 : 30 + Math.max(1, shown.length) * 17 + (more > 0 ? 17 : 0) + 12;
+      return typeCard(t, h, shown, more, folded);
+    });
+
+    var placed = [];
+    if (mode === "kind") {
+      var kindOrder = { struct: 0, interface: 1, type: 2 };
+      var sorted = cards.slice().sort(function (a, b) {
+        var ka = kindOrder[a.t.kind], kb = kindOrder[b.t.kind];
+        if (ka === undefined) ka = 3;
+        if (kb === undefined) kb = 3;
+        if (ka !== kb) return ka - kb;
+        return a.t.name.localeCompare(b.t.name);
+      });
+      var ys = [];
+      for (var c = 0; c < COLS; c++) ys.push(40);
+      sorted.forEach(function (card, i) {
+        var col = i % COLS;
+        placed.push({ card: card, x: 40 + col * (CARD_W + 40), y: ys[col] });
+        ys[col] += card.h + 26;
+      });
+    } else {
+      var rank = rankTypes(types, edges);
+      var bands = {};
+      cards.forEach(function (card) {
+        var r = rank[card.t.id] || 0;
+        (bands[r] = bands[r] || []).push(card);
+      });
+      var y = 40;
+      Object.keys(bands).map(Number).sort(function (a, b) { return a - b; }).forEach(function (r) {
+        var list = bands[r].sort(function (a, b) { return a.t.name.localeCompare(b.t.name); });
+        for (var i = 0; i < list.length; i += PER_ROW) {
+          var chunk = list.slice(i, i + PER_ROW);
+          var maxH = 0;
+          chunk.forEach(function (card, k) {
+            placed.push({ card: card, x: 40 + k * (CARD_W + 40), y: y });
+            if (card.h > maxH) maxH = card.h;
+          });
+          y += maxH + 24;
+        }
+        y += 24; // gap between dependency depths
+      });
+    }
+
+    return placed.map(function (p) {
+      return {
+        id: p.card.t.id,
+        kind: "type",
+        x: p.x,
+        y: p.y,
+        w: CARD_W,
+        h: p.card.h,
+        title: p.card.t.name,
+        rows: p.card.rows,
+        more: p.card.more,
+        folded: p.card.folded,
+        sub: p.card.t.kind + " · " + pkg.name,
+        crap: typeCrap(p.card.t),
+        href: typeHash(p.card.t.id),
+        selected: selected === p.card.t.id
+      };
+    });
+  }
+
+  // typePairs lists the reference edges between the given types, deduplicated
+  // and without self-loops. Targets outside the package stay in the list; the
+  // caller filters them out for drawing.
+  function typePairs(types, idx) {
+    var out = [];
+    var seen = {};
+    types.forEach(function (t) {
+      (t.fields || []).forEach(function (f) {
+        (f.refs || []).forEach(function (r) {
+          if (r === t.id) return;
+          var k = t.id + ">" + r;
+          if (seen[k]) return;
+          seen[k] = true;
+          out.push({ from: t.id, to: r, ref: true });
+        });
+      });
+    });
+    return out;
+  }
+
+  // ---------- scene ----------
+
+  function isHome(idx, route) {
+    return route.view === "home" || (route.view === "pkg" && !idx.pkgByPath.has(route.path));
+  }
+
+  // buildScene turns a model and a route into everything draw() needs. It is
+  // pure: same model, route and options give the same scene. view carries the
+  // 3.2 filters: {focus, collapsed, declutter}.
+  function buildScene(model, idx, route, all, view) {
+    view = view || {};
+    if (isHome(idx, route)) {
+      var pkgs = model.packages.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
+      var nodes = layoutPackages(pkgs, idx.pkgByPath, { modelPath: model.path, all: all });
+      var edges = [];
+      pkgs.forEach(function (p) {
+        (p.imports || []).forEach(function (imp) {
+          if (!idx.pkgByPath.has(imp)) return;
+          var edge = { from: imp, to: p.path, ref: false };
+          // p imports imp: the dependency points from p to imp.
+          if (layerViolation(model.layers, model.path, p.path, imp)) edge.violation = true;
+          edges.push(edge);
+        });
+      });
+      // 3.3: while searching, everything that does not match fades back.
+      if (view.query) {
+        var matchedPkgs = matchTypeIDs(searchHits(model, view.query, all));
+        nodes.forEach(function (n) {
+          var p = idx.pkgByPath.get(n.id);
+          var hit = (p && p.types ? p.types : []).some(function (t) { return matchedPkgs[t.id]; });
+          if (!hit) n.dim = true;
+        });
+      }
+      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs };
+    }
+
+    var pkg;
+    if (route.view === "type") {
+      var selectedType = idx.typeById.get(route.id);
+      pkg = selectedType ? selectedType.pkg : null;
+    } else {
+      pkg = idx.pkgByPath.get(route.path);
+    }
+    if (!pkg) return null;
+
+    var types = visible(pkg.types, all);
+    if (route.view === "type") {
+      // A type hidden by the export filter must still appear when it is the
+      // one the URL points at.
+      var chosen = idx.typeById.get(route.id);
+      if (chosen && types.indexOf(chosen) < 0) types.push(chosen);
+    }
+
+    // Relation pairs are needed before layout (3.1 ranks by them) and again
+    // for drawing, so they are computed once.
+    var pairs = typePairs(types, idx);
+    var tnodes = layoutTypes(pkg, types, {
+      all: all,
+      selected: route.view === "type" ? route.id : null,
+      collapsed: view.collapsed,
+      declutter: view.declutter,
+      layout: view.layout,
+      edges: pairs
+    });
+    var byId = new Map();
+    tnodes.forEach(function (n) { byId.set(n.id, n); });
+
+    var tedges = pairs.filter(function (e) {
+      return byId.has(e.from) && byId.has(e.to);
+    });
+
+    // Call edges are aggregated to the type level: a method of A calling a
+    // method of B draws one A -> B edge. Off by default (2.2).
+    if (view.calls) {
+      var callIndex = {};
+      (model.calls || []).forEach(function (c) {
+        var from = ownerTypeID(c.from);
+        var to = ownerTypeID(c.to);
+        if (!from || !to || from === to) return;
+        if (!byId.has(from) || !byId.has(to)) return;
+        var k = from + ">" + to;
+        var edge = callIndex[k];
+        if (!edge) {
+          edge = callIndex[k] = { from: from, to: to, ref: false, call: true, dynamic: true };
+          tedges.push(edge);
+        }
+        // One static call is enough to draw a solid line.
+        if (!c.dynamic) edge.dynamic = false;
+      });
+    }
+
+    if (view.query) {
+      var matched = matchTypeIDs(searchHits(model, view.query, all));
+      tnodes.forEach(function (n) {
+        if (!matched[n.id]) n.dim = true;
+      });
+    }
+
+    var scene = {
+      kind: "types",
+      key: "pkg:" + pkg.path,
+      nodes: tnodes,
+      edges: tedges,
+      pkg: pkg,
+      selected: route.view === "type" ? route.id : null
+    };
+    if (view.declutter) scene = declutterScene(scene, scene.selected);
+    if (view.focus) scene = focusScene(scene, view.focus);
+    return scene;
+  }
+
+  // ---------- geometry ----------
+
+  function edgePath(a, b) {
+    var x1 = a.x + a.w, y1 = a.y + a.h / 2;
+    var x2 = b.x, y2 = b.y + b.h / 2;
+    if (x2 <= x1) {
+      var dx = Math.max(70, Math.abs(x1 - x2) / 2);
+      return "M" + x1 + "," + y1 + " C" + (x1 + dx) + "," + y1 + " " + (x2 - dx) + "," + y2 + " " + x2 + "," + y2;
+    }
+    var mx = (x1 + x2) / 2;
+    return "M" + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2;
+  }
+
+  // fitTransform centres the scene in the viewport and keeps the zoom between
+  // 0.2 and 1.25, so a one-node scene never blows up to fill the screen.
+  function fitTransform(nodes, width, height) {
+    if (!nodes || !nodes.length) return { k: 1, tx: 0, ty: 0 };
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(function (n) {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.w);
+      maxY = Math.max(maxY, n.y + n.h);
+    });
+    var pad = 50;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    var bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+    var W = width || 1000, H = height || 700;
+    var k = Math.min(1.25, Math.max(0.2, Math.min((W - 60) / bw, (H - 60) / bh)));
+    return {
+      k: k,
+      tx: (W - bw * k) / 2 - minX * k,
+      ty: (H - bh * k) / 2 - minY * k
+    };
+  }
+
+  return {
+    esc: esc,
+    cut: cut,
+    short: short,
+    relPath: relPath,
+    visible: visible,
+    searchHits: searchHits,
+    matchTypeIDs: matchTypeIDs,
+    highlight: highlight,
+    layerOf: layerOf,
+    layerViolation: layerViolation,
+    ownerTypeID: ownerTypeID,
+    funcName: funcName,
+    parseHash: parseHash,
+    pkgHash: pkgHash,
+    typeHash: typeHash,
+    parsePos: parsePos,
+    sourceHref: sourceHref,
+    toAbs: toAbs,
+    pathForURL: pathForURL,
+    editorHref: editorHref,
+    indexModel: indexModel,
+    isHome: isHome,
+    layoutPackages: layoutPackages,
+    typeRows: typeRows,
+    layoutTypes: layoutTypes,
+    rankTypes: rankTypes,
+    typePairs: typePairs,
+    toggleCollapsed: toggleCollapsed,
+    focusScene: focusScene,
+    declutterScene: declutterScene,
+    CRAP_WARN: CRAP_WARN,
+    CRAP_BAD: CRAP_BAD,
+    crapLevel: crapLevel,
+    crapThresholds: crapThresholds,
+    formatCrap: formatCrap,
+    typeCrap: typeCrap,
+    buildScene: buildScene,
+    edgePath: edgePath,
+    fitTransform: fitTransform
+  };
+});
