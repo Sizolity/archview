@@ -725,6 +725,20 @@
   });
   window.addEventListener("resize", function () { fit(state.scene); });
 
+  // ---------- live reload (4.4) ----------
+
+  var events = null;
+
+  function connectEvents() {
+    if (events || window.__ARCHVIEW_DATA__) return;
+    if (typeof EventSource === "undefined") return;
+    events = new EventSource("/events");
+    events.addEventListener("reload", function () { boot(); });
+    // EventSource reconnects on its own; without -watch the endpoint 404s and
+    // the manual 重载 button stays the way to refresh.
+    events.onerror = function () {};
+  }
+
   // ---------- boot ----------
 
   async function boot() {
@@ -732,6 +746,7 @@
       await fetchModel();
       state.sceneKey = "";
       render();
+      connectEvents();
     } catch (e) {
       statusEl.textContent = "扫描失败";
       side.innerHTML = '<p class="err">' + esc(e.message) + "</p>";

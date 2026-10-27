@@ -42,6 +42,7 @@ explicitly change it.
 | `-config` | `archview.json` | config file to read |
 | `-dir` | `.` | directory to scan; a `go.work` in it means every module is scanned |
 | `-version` | | print the build's version and exit |
+| `-watch` | `false` | poll for source changes and push a reload to the page over SSE |
 
 `-dir` points the scan somewhere else. If that directory holds a `go.work`, every
 module it lists is scanned and merged into one model: package paths stay unique
@@ -136,6 +137,7 @@ archview -out view.html -editor vscode
 | `/model.json` | the scanned model |
 | `/source?path=<relative>.go` | read-only source view |
 | `/healthz` | liveness probe |
+| `/events` | server-sent reload events (only with `-watch`) |
 
 ## Model
 
@@ -182,9 +184,10 @@ layered layout in the roadmap.
 - `implements` accepts `T` or `*T`, and generic instantiations are not
   modelled yet, so generic types get no edges.
 - `/model.json` is cached: the server fingerprints the module (path, size and
-  mtime of every `.go` file plus `go.mod`/`go.sum`) on each request and rescans
-  only when something moved. A cache hit costs a directory walk, not a `go
-  list`. There is no watch mode, so press 重载 after editing code.
+  mtime of every `.go` file plus `go.mod`/`go.sum`/`go.work`) on each request and
+  rescans only when something moved. A cache hit costs a directory walk, not a
+  `go list`. With `-watch` the page also reloads itself through `/events`
+  (server-sent events); without it, press 重载 after editing code.
 - CRAP metrics are a startup snapshot: go-crap runs `go test` once, so changing
   code does not refresh the scores until a restart. `-no-crap` skips it.
 - A `-out` page is a snapshot: it grows with the inlined model and does not

@@ -37,6 +37,7 @@ func main() {
 	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
 	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+defaultConfigFile+")")
 	dir := flag.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
+	watch := flag.Bool("watch", false, "轮询源码变化,通过 SSE 通知页面自动重载")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
 
@@ -124,6 +125,10 @@ func main() {
 	}
 
 	srv := &Server{Root: m.Root, UI: uiHTML, JS: uiJS, Load: cache.Load}
+	if *watch {
+		srv.Watch = newWatcher()
+		go watchLoop(ctx, cache, srv.Watch, 500*time.Millisecond)
+	}
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,

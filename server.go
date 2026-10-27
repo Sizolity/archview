@@ -16,10 +16,11 @@ import (
 // Load may return a shared, read-only model (the cache hands out one pointer),
 // so handlers must not mutate it.
 type Server struct {
-	Root string
-	UI   []byte
-	JS   []byte
-	Load func(context.Context) (*Module, error)
+	Root  string
+	Watch *watcher
+	UI    []byte
+	JS    []byte
+	Load  func(context.Context) (*Module, error)
 }
 
 // Handler returns the read-only HTTP surface.
@@ -29,6 +30,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /ui.js", s.script)
 	mux.HandleFunc("GET /model.json", s.model)
 	mux.HandleFunc("GET /source", s.source)
+	mux.HandleFunc("GET /events", s.events)
 	mux.HandleFunc("GET /healthz", s.health)
 	return mux
 }
@@ -64,6 +66,39 @@ func (s *Server) model(w http.ResponseWriter, r *http.Request) {
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = fmt.Fprintln(w, "ok")
+}
+
+// events streams a "reload" event whenever the watched tree moves. It is only
+// served when -watch is on, and it never touches the model itself.
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	if s.Watch == nil {
+		http.NotFound(w, r)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "不支持流式响应", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	_, _ = fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+
+	ch := s.Watch.subscribe()
+	defer s.Watch.unsubscribe(ch)
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ch:
+			if _, err := fmt.Fprint(w, "event: reload\ndata: {}\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) source(w http.ResponseWriter, r *http.Request) {

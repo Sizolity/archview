@@ -51,6 +51,11 @@ func (c *modelCache) Load(ctx context.Context) (*Module, error) {
 	return m, nil
 }
 
+// fingerprint is the tree's current sum. The watcher and Load both use it.
+func (c *modelCache) fingerprint() (string, error) {
+	return treeFingerprint(c.dir)
+}
+
 // ignoredDir mirrors the directories the go command leaves out of ./...:
 // testdata, vendor, and anything starting with "." or "_".
 func ignoredDir(name string) bool {
