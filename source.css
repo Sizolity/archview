@@ -1,0 +1,59 @@
+/* Styles for the /source page: a light card that looks like a fenced code
+   block in Markdown. Kept out of server.go so the Go file stays readable. */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #f8fafc;
+  color: #0f172a;
+  font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.page { max-width: 1280px; margin: 0 auto; padding: 20px 20px 60px; }
+
+.bar {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 12px; font-size: 13px; color: #64748b;
+}
+.bar .back { color: #2563eb; text-decoration: none; }
+.bar .back:hover { text-decoration: underline; }
+.bar .path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #334155; }
+
+.block {
+  border: 1px solid #e2e8f0; border-radius: 10px; background: #fff;
+  overflow: hidden; box-shadow: 0 1px 2px rgba(15, 23, 42, .05);
+}
+
+.head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+  font-size: 12px; color: #475569;
+}
+.head .file {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.head .lang { border: 1px solid #e2e8f0; border-radius: 999px; padding: 0 8px; font-size: 11px; color: #64748b; }
+.head .count { margin-left: auto; color: #94a3b8; }
+
+.code {
+  margin: 0; padding: 12px 0; overflow: auto; background: #fff; tab-size: 4;
+  font: 12.5px/1.65 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.ln { display: block; width: max-content; min-width: 100%; padding-right: 20px; white-space: pre; }
+.ln:hover { background: #f6f8fa; }
+.ln:target { background: #fff8c5; box-shadow: inset 3px 0 0 #d4a72c; }
+
+.no {
+  display: inline-block; width: 4ch; padding-right: 16px;
+  text-align: right; color: #94a3b8; text-decoration: none; user-select: none;
+}
+.ln:hover .no { color: #475569; }
+.ln:target .no { color: #b45309; }
+
+@media (max-width: 640px) {
+  .page { padding: 10px; }
+  .no { width: 3ch; padding-right: 10px; }
+}
