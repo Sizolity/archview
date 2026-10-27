@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"strings"
 )
 
@@ -133,8 +132,12 @@ func metricKey(file string, line int) string {
 	return fmt.Sprintf("%s:%d", normalizeFile(file), line)
 }
 
+// normalizeFile puts a reported path into the model's slash form. The replace
+// is explicit rather than filepath.ToSlash: go-crap writes backslashes on
+// Windows, and that data must normalise the same way when the scan runs on
+// Linux (CI does exactly that).
 func normalizeFile(f string) string {
-	f = filepath.ToSlash(f)
+	f = strings.ReplaceAll(f, "\\", "/")
 	f = strings.TrimPrefix(f, "./")
 	return path.Clean(f)
 }
