@@ -2,7 +2,7 @@
 
 > 状态:生效
 > 更新:2026-10-27
-> 范围:archview 独立项目(module `github.com/huic/archview`)
+> 范围:archview 独立项目(module `github.com/Sizolity/archview`)
 > 本文只列**未实现**的部分;已实现的能力见 [README.md](README.md)。
 > 已完成条目的编号保留在文内(标"已完成"),避免改动交叉引用。
 
@@ -430,3 +430,4 @@ fixture(`testdata/exclude`)。
 
 判定"外部命令"的边界:只依赖已装工具(PATH 里有),命令缺失时降级为"无数据"并写
 `warnings`,绝不因为可选工具缺失而让扫描失败。
+

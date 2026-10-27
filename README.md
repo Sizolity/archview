@@ -251,7 +251,7 @@ go build -ldflags "-X main.version=1.2.3" -o archview .
 ```
 
 `.goreleaser.yaml` builds static binaries for linux/darwin/windows on
-amd64/arm64 with that same flag; `go install github.com/huic/archview@latest`
+amd64/arm64 with that same flag; `go install github.com/Sizolity/archview@latest`
 works once the module is published.
 
 ## Design
@@ -262,4 +262,5 @@ How a scan becomes a page, the model schema and the trade-offs:
 ## Roadmap
 
 Unimplemented features with acceptance criteria live in [ROADMAP.md](ROADMAP.md).
+
 
