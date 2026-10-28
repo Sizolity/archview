@@ -226,7 +226,7 @@
 
   var state = {
     model: null, all: false, q: "", route: { view: "home" },
-    focus: false, collapsed: [], declutter: false, layout: "layer", calls: false,
+    focus: false, collapsed: [], expanded: [], declutter: false, layout: "layer", calls: false,
     moved: {}, suppressClick: false,
     hits: [], hitIndex: 0,
     tx: 0, ty: 0, k: 1, sceneKey: "", scene: null
@@ -379,6 +379,9 @@
         class: "node" + (n.selected ? " selected" : "") + (n.dim ? " dim" : ""),
         "data-id": n.id
       });
+      // Hover text: the card truncates, the tooltip does not.
+      g.appendChild(el("title", {}, n.title + (n.sub ? " — " + n.sub : "") +
+        (n.more > 0 ? " (还有 " + n.more + " 条,点击展开)" : "")));
       var fill = n.kind === "pkg" ? "#e0e7ff" :
         (n.kind === "func" ? "#f1f5f9" :
           (n.kind === "value" ? "#f0fdf4" : (n.sub === "interface" ? "#fef3c7" : "#dbeafe")));
@@ -415,7 +418,17 @@
           g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + i * 17, class: "row" }, cut(row, 42)));
         });
         if (n.more > 0) {
-          g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind" }, "… 还有 " + n.more + " 条"));
+          var moreText = el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind" },
+            "… 还有 " + n.more + " 条(点击展开)");
+          moreText.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            state.expanded = state.expanded.indexOf(n.id) >= 0
+              ? state.expanded.filter(function (x) { return x !== n.id; })
+              : state.expanded.concat([n.id]);
+            state.sceneKey = "";
+            render();
+          });
+          g.appendChild(moreText);
         }
       }
       if (n.kind === "pkg" && n.entry) {
@@ -717,6 +730,7 @@
     var scene = A.buildScene(state.model, idx, state.route, state.all, {
       focus: state.focus ? state.route.id : "",
       collapsed: state.collapsed,
+      expanded: state.expanded,
       declutter: state.declutter,
       layout: state.layout,
       calls: state.calls,

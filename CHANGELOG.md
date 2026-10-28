@@ -8,6 +8,9 @@ workflow.
 
 ## Unreleased
 
+- Cards carry a hover tooltip with the untruncated text, and the elision line is
+  clickable to expand that card in place. Truncation now breaks at a word.
+
 - Type cards show the printed declaration (	ype Server struct { … }), and
   function cards show their doc comment, falling back to the signature.
 

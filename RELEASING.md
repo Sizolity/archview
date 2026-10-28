@@ -6,11 +6,18 @@ accident.
 
 ## Version rules
 
+**Pre-1.0 (current):** new flags, new model fields and new UI behaviour ship as
+**patch** releases. The version only moves to the next minor for a breaking
+change or a deliberate milestone; 1.0 is for a CLI, JSON and EDN contract you
+are willing to keep. A release is a moment worth installing, not a receipt for
+every merged change: if nothing would change for the user, it waits for the
+next one.
+
 | Change | Bump | Examples |
 | --- | --- | --- |
-| bug fix, internal refactor, docs, performance | **PATCH** `0.2.x` | CRAP scores lost after a rescan; `goimports` grouping |
-| new flag, new model/JSON field, new UI capability, behaviour users must notice | **MINOR** `0.x.0` | `-diff`, the CRAP cache |
-| removing or renaming a flag, a breaking JSON/EDN shape or output format | **MAJOR** `x.0.0` | renaming `-edn` |
+| bug fix, internal refactor, docs, performance, new flag or field (pre-1.0) | **PATCH** `0.4.x` | CRAP scores lost after a rescan; `goimports` grouping |
+| breaking change, or a milestone worth a new minor | **MINOR** `0.x.0` | a renamed flag, a new diagram mode |
+| after 1.0: removing or renaming a flag, a breaking JSON/EDN shape or output format | **MAJOR** `x.0.0` | renaming `-edn` |
 
 Before 1.0 a breaking change may ship in a minor, but the changelog has to say
 so in the first line. Reach 1.0 when the CLI, the model JSON and the EDN schema

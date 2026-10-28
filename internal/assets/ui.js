@@ -21,6 +21,14 @@
   }
 
   function cut(s, n) {
+    s = String(s == null ? '' : s);
+    if (s.length <= n) return s;
+    var head = s.slice(0, n - 1);
+    var sp = head.lastIndexOf(' ');
+    if (sp > n * 0.5) head = head.slice(0, sp);
+    return head + '…';
+  }
+  function cutOld(s, n) {
     s = String(s == null ? "" : s);
     return s.length <= n ? s : s.slice(0, n - 1) + "…";
   }
@@ -599,6 +607,7 @@
     var all = !!opts.all;
     var selected = opts.selected || null;
     var collapsed = opts.collapsed || [];
+    var expanded = opts.expanded || [];
     var declutter = !!opts.declutter;
     var mode = layoutMode(opts.layout);
     var edges = opts.edges || [];
@@ -606,7 +615,7 @@
     var cards = types.map(function (t) {
       var folded = declutter || collapsed.indexOf(t.id) >= 0;
       var rows = folded ? [] : (t.text ? textRows(t.text) : typeRows(t, all));
-      var shown = rows.slice(0, 7);
+      var shown = rows.slice(0, expanded.indexOf(t.id) >= 0 ? rows.length : 7);
       var more = rows.length - shown.length;
       var h = folded ? 44 : 30 + Math.max(1, shown.length) * 17 + (more > 0 ? 17 : 0) + 12;
       return typeCard(t, h, shown, more, folded);
@@ -804,6 +813,7 @@
     // for drawing, so they are computed once.
     var pairs = typePairs(types, idx);
     var tnodes = layoutTypes(pkg, types, {
+      expanded: view.expanded,
       all: all,
       selected: route.view === "type" ? route.id : null,
       collapsed: view.collapsed,
