@@ -114,7 +114,7 @@ func TestMetricsApplyCarriesWarnings(t *testing.T) {
 }
 
 func TestCollectMetricsMissingToolDegrades(t *testing.T) {
-	b := Collect(context.Background(), "", "archview-no-such-tool-xyz")
+	b := Collect(context.Background(), "", "archview-no-such-tool-xyz", nil)
 	if len(b.Warnings) == 0 {
 		t.Fatal("missing tool should produce a warning")
 	}

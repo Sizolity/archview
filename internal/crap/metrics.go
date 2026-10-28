@@ -40,26 +40,44 @@ type Bundle struct {
 	Summary    model.MetricsSummary
 	Thresholds []int
 	Warnings   []string
+	// Cached reports that the bundle came from the disk cache instead of a run.
+	Cached bool
 }
 
-// Collect runs go-crap in dir ("" = the process working directory).
+// Collect runs go-crap in dir ("" = the process working directory) with extra
+// arguments appended to the scan command.
 // Failure is not fatal: it becomes a warning and the viewer runs without
 // scores.
-func Collect(ctx context.Context, dir, command string) *Bundle {
+func Collect(ctx context.Context, dir, command string, args []string) *Bundle {
+	b, _ := collect(ctx, dir, command, args)
+	return b
+}
+
+// collect is Collect that also hands back the raw report, so it can be cached.
+func collect(ctx context.Context, dir, command string, args []string) (*Bundle, []byte) {
 	b := &Bundle{ByKey: map[string]model.Metrics{}}
-	out, err := runCrap(ctx, dir, command)
+	out, err := runCrap(ctx, dir, command, args)
 	if err != nil {
 		b.Warnings = append(b.Warnings, "CRAP 指标不可用: "+model.OneLine(err.Error()))
-		return b
+		return b, nil
 	}
 	byKey, summary, err := parseCrapReport(out)
 	if err != nil {
 		b.Warnings = append(b.Warnings, "CRAP 报告无法解析: "+model.OneLine(err.Error()))
-		return b
+		return b, nil
 	}
 	b.ByKey = byKey
 	b.Summary = summary
-	return b
+	return b, out
+}
+
+// bundleFromReport parses a report that was cached earlier.
+func bundleFromReport(raw []byte) (*Bundle, error) {
+	byKey, summary, err := parseCrapReport(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &Bundle{ByKey: byKey, Summary: summary}, nil
 }
 
 // runCrap asks go-crap for a JSON report on stdout. Nothing is written into
@@ -67,11 +85,13 @@ func Collect(ctx context.Context, dir, command string) *Bundle {
 //
 // The pattern must be "." — go-crap v0.5.1 fails on "./..." while discovering
 // modules.
-func runCrap(ctx context.Context, dir, command string) ([]byte, error) {
+func runCrap(ctx context.Context, dir, command string, args []string) ([]byte, error) {
 	if command == "" {
 		command = "go-crap"
 	}
-	cmd := exec.CommandContext(ctx, command, "scan", "-f", "json", "--no-progress", ".")
+	argv := append([]string{"scan", "-f", "json", "--no-progress"}, args...)
+	argv = append(argv, ".")
+	cmd := exec.CommandContext(ctx, command, argv...)
 	if dir != "" {
 		cmd.Dir = dir
 	}

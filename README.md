@@ -49,6 +49,9 @@ explicitly change it.
 | `-edn` | | write the uml-viewer topology IR to this file and exit |
 | `-import-edn` | | render an IR instead of scanning code |
 | `-crap-cmd` | `go-crap` | command that produces the CRAP report |
+| `-crap-profile` | | reuse a coverage profile instead of running the tests |
+| `-no-crap-cache` | `false` | do not reuse the cached CRAP report |
+| `-cache-dir` | user cache dir | where the CRAP report is cached |
 | `-no-crap` | `false` | skip CRAP metrics entirely |
 | `-config` | `archview.json` | config file to read |
 | `-dir` | `.` | directory to scan; a `go.work` in it means every module is scanned |
@@ -89,11 +92,27 @@ Unknown keys are rejected: a typo is a mistake, not a forward-compatible
 extension.
 
 CRAP scores come from [go-crap](https://github.com/padiazg/go-crap), an external
-command, not a Go dependency: it runs `go-crap scan -f json .` once at startup,
-so the first page load waits for a `go test` run **and the module's test suite
+command, not a Go dependency: it runs `go-crap scan -f json .` once per scan, so
+the first page load waits for a `go test` run **and the module's test suite
 executes**. Use `-no-crap` if that is not what you want. Without go-crap on
 `PATH` the viewer still starts and simply shows no scores (`warnings` records
 why).
+
+CRAP needs coverage, so go-crap gets it by running the tests. Two ways out:
+
+```sh
+archview -crap-profile coverage.out   # reuse a profile, run no tests
+archview -no-crap                     # no scores at all
+```
+
+The report is also cached in the user's cache directory
+(`%LocalAppData%\archview` on Windows, `~/Library/Caches/archview` on macOS,
+`$XDG_CACHE_HOME/archview` on Linux) and keyed by the source fingerprint, the
+go-crap binary and the flags — a restart on an unchanged tree reuses it
+(measured: 20 s cold, 54 ms warm). It is deliberately **not** written into the
+module: archview reads projects and does not write into them, so there is no
+`.gitignore` entry to add. Relocate it with `-cache-dir` or
+`ARCHVIEW_CACHE_DIR`, and turn it off with `-no-crap-cache`.
 
 ### Single-file export
 
@@ -196,7 +215,7 @@ fatal. An imported model has no source directory, so `/source` returns 404 and
 - `metrics` — the module summary from go-crap (`average`, `combined`,
   `exceeded`, `total_funcs`). Functions and methods carry their own `metrics`:
   `cyclomatic`, `coverage` (a 0–100 percentage, go-crap's unit) and `crap`.
-  Collected once at startup; `-no-crap` omits the field entirely.
+  Collected per scan and cached between runs; `-no-crap` omits the field entirely.
 
 - `calls` — the module's call graph, `{from, to, dynamic}`, where both ends are
   function IDs (`<import path>#<Func>` or `<import path>#<Type>.<Method>`) and
@@ -225,8 +244,9 @@ layered layout in the roadmap.
   rescans only when something moved. A cache hit costs a directory walk, not a
   `go list`. With `-watch` the page also reloads itself through `/events`
   (server-sent events); without it, press 重载 after editing code.
-- CRAP metrics are a startup snapshot: go-crap runs `go test` once, so changing
-  code does not refresh the scores until a restart. `-no-crap` skips it.
+- CRAP metrics refresh when the tree changes, at the cost of one `go test` run
+  per change; the disk cache only helps across restarts. `-no-crap` skips it,
+  `-crap-profile` replaces the test run with an existing coverage file.
 - A `-out` page is a snapshot: it grows with the inlined model and does not
   update when the code changes.
 - It reads the module with `go list`, `go/parser` and `go/types`; it never

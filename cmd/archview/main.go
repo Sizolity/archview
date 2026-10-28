@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -58,9 +59,22 @@ func loadModel(ctx context.Context, dir string, cfg *config.Config, mode string,
 		slog.Warn("CRAP 报告没有对上任何函数,页面不显示分数", "functions", len(b.ByKey))
 	default:
 		slog.Info("CRAP 指标已采集", "matched", matched, "functions", len(b.ByKey),
-			"took", time.Since(started).Round(time.Millisecond))
+			"cached", b.Cached, "took", time.Since(started).Round(time.Millisecond))
 	}
 	return m, nil
+}
+
+// defaultCacheDir is where the CRAP report is cached: the user's cache
+// directory, never the inspected module.
+func defaultCacheDir() string {
+	if d := os.Getenv("ARCHVIEW_CACHE_DIR"); d != "" {
+		return d
+	}
+	d, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(d, "archview")
 }
 
 func main() {
@@ -70,6 +84,9 @@ func main() {
 	ednOut := flag.String("edn", "", "把 uml-viewer 拓扑 IR 写到该文件后退出")
 	importPath := flag.String("import-edn", "", "读取 uml-viewer IR 并直接渲染(不扫描代码)")
 	crapCmd := flag.String("crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
+	crapProfile := flag.String("crap-profile", "", "已有覆盖率文件(go test -coverprofile 产出),给出则不跑测试")
+	noCrapCache := flag.Bool("no-crap-cache", false, "不缓存 CRAP 报告(默认缓存在用户缓存目录)")
+	cacheDirFlag := flag.String("cache-dir", "", "缓存目录(默认用户缓存目录;空表示默认)")
 	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
 	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+config.DefaultFile+")")
 	dir := flag.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
@@ -113,8 +130,19 @@ func main() {
 	// collect runs go-crap once per model build, or not at all.
 	var collect func(context.Context, string) *crap.Bundle
 	if !noMetrics && *importPath == "" {
+		var crapArgs []string
+		if *crapProfile != "" {
+			crapArgs = append(crapArgs, "--coverage-profile", *crapProfile)
+		}
+		cacheDir := *cacheDirFlag
+		if cacheDir == "" {
+			cacheDir = defaultCacheDir()
+		}
+		if *noCrapCache {
+			cacheDir = ""
+		}
 		collect = func(c context.Context, dir string) *crap.Bundle {
-			return crap.Collect(c, dir, *crapCmd)
+			return crap.CollectCached(c, dir, *crapCmd, crapArgs, cacheDir)
 		}
 	}
 

@@ -53,6 +53,12 @@ func (c *Cache) Load(ctx context.Context) (*model.Module, error) {
 	return m, nil
 }
 
+// FingerprintOf is the tree's current sum, computed without a Cache. The CRAP
+// report is cached against it.
+func FingerprintOf(dir string) (string, error) {
+	return treeFingerprint(dir)
+}
+
 // Fingerprint is the tree's current sum; Load and the Watcher both use it.
 func (c *Cache) Fingerprint() (string, error) {
 	return treeFingerprint(c.dir)
