@@ -215,6 +215,21 @@ test("buildScene draws packages and imports on the home view", () => {
   assert.deepEqual(scene.edges, [{ from: "example.com/app", to: "example.com/app/store", ref: false }]);
 });
 
+test("buildScene marks the selected package on the home view", () => {
+  const model = fixture();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "home" }, false, {
+    selected: "example.com/app/store"
+  });
+  const selected = scene.nodes.filter((n) => n.selected);
+  assert.deepEqual(selected.map((n) => n.id), ["example.com/app/store"]);
+  assert.equal(scene.selected, "example.com/app/store");
+  // Without a selection, the whole module stays unselected.
+  const plain = ui.buildScene(model, idx, { view: "home" }, false);
+  assert.equal(plain.nodes.some((n) => n.selected), false);
+  assert.equal(plain.selected, "");
+});
+
 test("buildScene draws type cards and reference edges for a package", () => {
   const model = fixture();
   const idx = ui.indexModel(model);

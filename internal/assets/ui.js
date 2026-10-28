@@ -805,12 +805,18 @@
 
   // buildScene turns a model and a route into everything draw() needs. It is
   // pure: same model, route and options give the same scene. view carries the
-  // 3.2 filters: {focus, collapsed, declutter}.
+  // 3.2 filters: {focus, collapsed, declutter} plus the home view's selected
+  // package.
   function buildScene(model, idx, route, all, view) {
     view = view || {};
     if (isHome(idx, route)) {
       var pkgs = model.packages.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
+      var selected = view.selected || "";
+      if (selected && !idx.pkgByPath.has(selected)) selected = "";
       var nodes = layoutPackages(pkgs, idx.pkgByPath, { modelPath: model.path, all: all });
+      // The module view has one selection: the card the reader clicked. It is
+      // separate from the route, which only changes on a double-click.
+      nodes.forEach(function (n) { n.selected = n.id === selected; });
       var edges = [];
       pkgs.forEach(function (p) {
         (p.imports || []).forEach(function (imp) {
@@ -832,7 +838,7 @@
         });
       }
       applyMoved(nodes, view.moved);
-      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: "h" };
+      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: "h", selected: selected };
     }
 
     var pkg;

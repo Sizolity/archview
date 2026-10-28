@@ -186,7 +186,7 @@
 <main>
   <section id="canvas">
     <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
-    <div id="hint">拖拽平移 · 滚轮缩放 · 点击方框下钻</div>
+    <div id="hint">拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码</div>
     <div id="cardhelp" class="cardhelp" aria-label="样式说明">
       <div><b>卡片</b> <span class="sw" style="background:#dbeafe;border-color:#3b82f6"></span>类型
         <span class="sw" style="background:#fef3c7;border-color:#d97706"></span>接口
@@ -261,7 +261,7 @@
   }
 
   var state = {
-    model: null, all: false, q: "", route: { view: "home" },
+    model: null, all: false, q: "", route: { view: "home" }, sel: "",
     focus: false, collapsed: [], expanded: [], declutter: false, layout: "layer", calls: false,
     moved: {}, suppressClick: false,
     hits: [], hitIndex: 0,
@@ -365,15 +365,6 @@
   }
 
   // edgeClass names the relation so the CSS owns the look.
-  // hoverPackage lights the import edges of the package under the pointer: the
-  // module view has no selection, so this is its version of the highlight.
-  function hoverPackage(id, on) {
-    edgeEls.forEach(function (it) {
-      if (!it.el) return;
-      var touch = it.from === id || it.to === id;
-      it.el.setAttribute("class", it.cls + (on ? (touch ? " hl" : " faded") : ""));
-    });
-  }
   var edgeEls = [];
   function edgeClass(e) {
     var cls = "edge";
@@ -383,6 +374,17 @@
     if (e.call) cls += " call" + (e.dynamic ? " dynamic" : "");
     if (e.violation) cls += " violation";
     return cls;
+  }
+
+  // highlightEdges is the one selection mechanism on the canvas: the edges
+  // that touch the selected card stay in front, the rest recede. With nothing
+  // selected every edge keeps its base class.
+  function highlightEdges(selected) {
+    edgeEls.forEach(function (it) {
+      if (!it.el) return;
+      var touch = it.from === selected || it.to === selected;
+      it.el.setAttribute("class", it.cls + (selected ? (touch ? " hl" : " faded") : ""));
+    });
   }
 
   function draw(scene) {
@@ -408,19 +410,13 @@
     scene.edges.forEach(function (e) {
       var a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) return;
-      // With a selection, the edges that touch it stay in front and the rest
-      // recede, so the card's relations read at a glance.
       var cls = edgeClass(e);
-      edgeEls.push({ el: null, from: e.from, to: e.to, cls: cls });
-      if (scene.selected) {
-        cls += (e.from === scene.selected || e.to === scene.selected) ? " hl" : " faded";
-      }
       var p = el("path", {
         d: A.edgePath(a, b, scene.axis),
         class: cls,
         "marker-end": "url(#" + markerFor(e) + ")"
       });
-      if (edgeEls.length) edgeEls[edgeEls.length - 1].el = p;
+      edgeEls.push({ el: p, from: e.from, to: e.to, cls: cls });
       if (!e.ref) {
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on.
@@ -428,6 +424,7 @@
       }
       world.appendChild(p);
     });
+    highlightEdges(scene.selected);
 
     scene.nodes.forEach(function (n) {
       var g = el("g", {
@@ -523,22 +520,29 @@
         // never reapplied after a re-render anyway. The canvas still pans.
         state.suppressClick = false;
       });
-      if (scene.kind === "packages") {
-        g.addEventListener("mouseenter", function () { hoverPackage(n.id, true); });
-        g.addEventListener("mouseleave", function () { hoverPackage(n.id, false); });
-      }
       g.addEventListener("click", function (ev) {
         ev.stopPropagation();
         if (state.suppressClick) return;
         // A card that is already the current view must not re-render: the
         // double-click below needs the element to stay alive.
         if (n.selected) return;
+        // A single click on a module card selects it and stays on the module
+        // view; entering the module is the double-click below.
+        if (n.kind === "pkg") {
+          state.sel = n.id;
+          render();
+          return;
+        }
         go(n.href);
       });
-      // Double-click drills into the source: the card is the last level of the
-      // diagram, so the next thing to read is the code itself.
+      // Double-click drills down: a module card enters the module, and a type,
+      // function or value card opens its source (the last level of the diagram).
       g.addEventListener("dblclick", function (ev) {
         ev.stopPropagation();
+        if (n.kind === "pkg") {
+          go(n.href);
+          return;
+        }
         if (n.kind !== "type" && n.kind !== "func" && n.kind !== "value") return;
         var href = A.editorHref(state.model.editor, state.model.root, n.pos);
         if (!href) return;
@@ -623,9 +627,53 @@
     renderType(t);
   }
 
+  // homeDetail is the module inspector for the package selected on the canvas:
+  // counts, risk, change marker, both import directions and the way in.
+  function homeDetail(p) {
+    var html = "<h2>" + esc(short(p.path)) + "</h2>";
+    html += '<div class="meta">' + esc(rel(p.path)) + "</div>";
+    var all = A.showsAll(p, state.all);
+    html += '<div class="meta">' + A.visible(p.types, all).length + " 类型 · " +
+      A.visible(p.funcs, all).length + " 函数 · " + A.visible(A.valuesOf(p), all).length + " 变量";
+    var worst = A.packageCrap(p);
+    if (worst != null) html += " " + crapChip(worst);
+    html += "</div>";
+    if (A.packageChanged(p)) html += '<p><span class="badge diff">已修改</span></p>';
+    html += '<a class="src" href="' + pkgHash(p.path) + '">进入 ' + esc(short(p.path)) + "</a>";
+
+    var imports = p.imports || [];
+    html += "<h3>依赖</h3>";
+    if (!imports.length) html += '<p class="empty">没有模块内依赖</p>';
+    else {
+      html += '<div class="chips">';
+      imports.forEach(function (i) {
+        html += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>";
+      });
+      html += "</div>";
+    }
+
+    var importers = state.model.packages.filter(function (q) {
+      return q.path !== p.path && (q.imports || []).indexOf(p.path) >= 0;
+    });
+    html += "<h3>被依赖</h3>";
+    if (!importers.length) html += '<p class="empty">没有其他模块依赖它</p>';
+    else {
+      html += '<div class="chips">';
+      importers.forEach(function (q) {
+        html += '<a class="chip" href="' + pkgHash(q.path) + '">' + esc(rel(q.path)) + "</a>";
+      });
+      html += "</div>";
+    }
+    return html;
+  }
+
   function renderHome() {
-    var html = "<h2>模块总览</h2>";
-    html += '<div class="meta">' + state.model.packages.length + " 个包 · 点击方框进入模块</div>";
+    var sel = state.sel ? idx.pkgByPath.get(state.sel) : null;
+    var html = sel ? homeDetail(sel) : "";
+    // With a selection the detail leads; the full list stays below so another
+    // module can be picked without going back to the canvas.
+    html += sel ? "<h3>模块总览</h3>" : "<h2>模块总览</h2>";
+    html += '<div class="meta">' + state.model.packages.length + " 个包 · 单击方框选中 · 双击进入模块</div>";
     if (state.model.metrics) {
       var s = state.model.metrics;
       html += '<div class="meta">CRAP 平均 ' + A.formatCrap(s.average) + " · 超标 " +
@@ -637,7 +685,7 @@
         '<span class="count">' + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数</span></a></li>";
     });
     html += "</ul>";
-    html += '<h3>说明</h3><p class="doc">图中每个方框是一个模块，箭头表示依赖方向；点击进入后显示该模块的类型卡片，字段与方法的类型可以继续点击。</p>';
+    html += '<h3>说明</h3><p class="doc">图中每个方框是一个模块，箭头表示依赖方向；单击选中，双击进入后显示该模块的类型卡片，字段与方法的类型可以继续点击。</p>';
     side.innerHTML = html;
   }
 
@@ -869,7 +917,8 @@
       declutter: state.declutter,
       layout: state.layout,
       calls: state.calls,
-      query: state.q
+      query: state.q,
+      selected: state.sel
     });
     if (!scene) {
       go("#/");
@@ -896,7 +945,7 @@
     var hint = document.getElementById("hint");
     hint.textContent =
       (state.focus && isType ? "已聚焦：只显示一跳邻居 · Esc 退出 · " : "") +
-      "拖拽平移 · 滚轮缩放 · 点击方框下钻 · 双击查看源码" +
+      "拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
       " · 箭头指向被依赖方 · ▾ 折叠成员";
