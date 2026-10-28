@@ -103,38 +103,66 @@ func defaultCacheDir() string {
 }
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:8788", "监听地址(默认只绑回环)")
-	editor := flag.String("editor", "source", "源码跳转方式: source|vscode|goland|file|none")
-	out := flag.String("out", "", "把自包含页面写到该文件后退出(单文件导出)")
-	ednOut := flag.String("edn", "", "把 uml-viewer 拓扑 IR 写到该文件后退出")
-	importPath := flag.String("import-edn", "", "读取 uml-viewer IR 并直接渲染(不扫描代码)")
-	crapCmd := flag.String("crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
-	crapProfile := flag.String("crap-profile", "", "已有覆盖率文件(go test -coverprofile 产出),给出则不跑测试")
-	noCrapCache := flag.Bool("no-crap-cache", false, "不缓存 CRAP 报告(默认缓存在用户缓存目录)")
-	cacheDirFlag := flag.String("cache-dir", "", "缓存目录(默认用户缓存目录;空表示默认)")
-	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
-	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+config.DefaultFile+")")
-	dir := flag.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
-	diffRef := flag.String("diff", "", "把工作区相对该 git 引用的改动标在函数/类型上(如 HEAD、HEAD~1)")
-	watch := flag.Bool("watch", false, "轮询源码变化,通过 SSE 通知页面自动重载")
-	showVersion := flag.Bool("version", false, "打印版本后退出")
-	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, os.Args[1:]); err != nil {
+		var exit *exitError
+		if errors.As(err, &exit) {
+			slog.Error("archview 退出", "err", exit.err)
+			os.Exit(exit.code)
+		}
+		slog.Error("archview 退出", "err", err)
+		os.Exit(1)
+	}
+}
+
+// exitError carries the exit status the CLI documents (2 for a bad config).
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e *exitError) Error() string { return e.err.Error() }
+
+// run is the whole command. It returns instead of exiting so the paths that
+// used to be untestable -- a bad config, a failed import, a busy port -- can be
+// asserted in a test.
+func run(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("archview", flag.ContinueOnError)
+	addr := fs.String("addr", "127.0.0.1:8788", "监听地址(默认只绑回环)")
+	editor := fs.String("editor", "source", "源码跳转方式: source|vscode|goland|file|none")
+	out := fs.String("out", "", "把自包含页面写到该文件后退出(单文件导出)")
+	ednOut := fs.String("edn", "", "把 uml-viewer 拓扑 IR 写到该文件后退出")
+	importPath := fs.String("import-edn", "", "读取 uml-viewer IR 并直接渲染(不扫描代码)")
+	crapCmd := fs.String("crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
+	crapProfile := fs.String("crap-profile", "", "已有覆盖率文件(go test -coverprofile 产出),给出则不跑测试")
+	noCrapCache := fs.Bool("no-crap-cache", false, "不缓存 CRAP 报告(默认缓存在用户缓存目录)")
+	cacheDirFlag := fs.String("cache-dir", "", "缓存目录(默认用户缓存目录;空表示默认)")
+	noCrap := fs.Bool("no-crap", false, "跳过 CRAP 指标")
+	configPath := fs.String("config", "", "配置文件路径(默认读当前目录的 "+config.DefaultFile+")")
+	dir := fs.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
+	diffRef := fs.String("diff", "", "把工作区相对该 git 引用的改动标在函数/类型上(如 HEAD、HEAD~1)")
+	watch := fs.Bool("watch", false, "轮询源码变化,通过 SSE 通知页面自动重载")
+	showVersion := fs.Bool("version", false, "打印版本后退出")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if *showVersion {
 		fmt.Println("archview " + version)
-		return
+		return nil
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
 	set := map[string]bool{}
-	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
 	cfg, err := config.Load(*configPath, set["config"])
 	if err != nil {
-		logger.Error("配置无效", "err", err)
-		os.Exit(2)
+		return &exitError{code: 2, err: fmt.Errorf("配置无效: %w", err)}
 	}
 	if cfg.Path != "" {
 		logger.Info("已读取配置", "path", cfg.Path)
@@ -149,9 +177,6 @@ func main() {
 	if !set["no-crap"] && cfg.Metrics.Enabled != nil {
 		noMetrics = !*cfg.Metrics.Enabled
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// collect runs go-crap once per model build, or not at all.
 	var collect func(context.Context, string) *crap.Bundle
@@ -186,13 +211,11 @@ func main() {
 		// An imported IR replaces the scan entirely: there is no module to read.
 		data, err := os.ReadFile(*importPath)
 		if err != nil {
-			logger.Error("读取 EDN 失败", "path", *importPath, "err", err)
-			os.Exit(1)
+			return fmt.Errorf("读取 EDN 失败: %w", err)
 		}
 		imported, ignored, err := export.Import(data)
 		if err != nil {
-			logger.Error("EDN 无法解析", "path", *importPath, "err", err)
-			os.Exit(1)
+			return fmt.Errorf("EDN 无法解析: %w", err)
 		}
 		imported.Editor = mode
 		m = imported
@@ -203,8 +226,7 @@ func main() {
 		cached = cache.New(*dir, loadFn)
 		m, err = cached.Load(ctx)
 		if err != nil {
-			logger.Error("扫描模块失败", "err", err)
-			os.Exit(1)
+			return fmt.Errorf("扫描模块失败: %w", err)
 		}
 		load = cached.Load
 		logger.Info("索引完成", "packages", len(m.Packages), "root", m.Root, "layers", len(cfg.Layers))
@@ -217,24 +239,21 @@ func main() {
 			m.Editor = export.StaticEditor(mode)
 			page, err := export.HTML(assets.UI, assets.JS, m)
 			if err != nil {
-				logger.Error("导出失败", "err", err)
-				os.Exit(1)
+				return fmt.Errorf("导出失败: %w", err)
 			}
 			if err := os.WriteFile(*out, page, 0o644); err != nil {
-				logger.Error("写文件失败", "path", *out, "err", err)
-				os.Exit(1)
+				return fmt.Errorf("写文件失败: %w", err)
 			}
 			logger.Info("已导出单文件页面", "path", *out, "bytes", len(page))
 		}
 		if *ednOut != "" {
 			ir := export.EDN(m)
 			if err := os.WriteFile(*ednOut, ir, 0o644); err != nil {
-				logger.Error("写文件失败", "path", *ednOut, "err", err)
-				os.Exit(1)
+				return fmt.Errorf("写文件失败: %w", err)
 			}
 			logger.Info("已导出 EDN", "path", *ednOut, "bytes", len(ir))
 		}
-		return
+		return nil
 	}
 
 	srv := &web.Server{Root: m.Root, UI: assets.UI, JS: assets.JS, CSS: assets.CSS, Ctx: ctx, Load: load}
@@ -252,8 +271,7 @@ func main() {
 	}
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
-		logger.Error("监听失败", "addr", *addr, "err", err)
-		os.Exit(1)
+		return fmt.Errorf("监听失败: %w", err)
 	}
 	logger.Info("服务已启动", "url", "http://"+ln.Addr().String())
 
@@ -264,8 +282,7 @@ func main() {
 	case <-ctx.Done():
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("服务异常退出", "err", err)
-			os.Exit(1)
+			return fmt.Errorf("服务异常退出: %w", err)
 		}
 	}
 
@@ -275,4 +292,5 @@ func main() {
 		logger.Error("优雅关闭失败", "err", err)
 	}
 	logger.Info("服务已停止")
+	return nil
 }
