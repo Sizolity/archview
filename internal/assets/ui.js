@@ -365,7 +365,9 @@
           title: short(p.path),
           sub: relPath(modelPath, p.path),
           lines: [visible(p.types, showsAll(p, all)).length + " 类型 · " +
-            visible(p.funcs, showsAll(p, all)).length + (p.main ? " 函数 · 程序入口" : " 函数")],
+            visible(p.funcs, showsAll(p, all)).length + " 函数" +
+            (valuesOf(p).length ? " · " + valuesOf(p).length + " 变量" : "") +
+            (p.main ? " · 程序入口" : "")],
           changed: packageChanged(p),
           entry: !!p.main,
           href: pkgHash(p.path),
@@ -466,6 +468,12 @@
   function formatCrap(v) {
     if (v == null || !isFinite(v)) return "";
     return Number(v).toFixed(1);
+  }
+
+  // valuesOf lists a package's constants and variables in one slice.
+  function valuesOf(p) {
+    if (!p) return [];
+    return (p.consts || []).concat(p.vars || []);
   }
 
   // showsAll decides the exported filter per package. A program entry has no
@@ -665,6 +673,27 @@
           changed: !!f.changed,
           href: pkgHash(pkg.path),
           selected: selected === f.id
+        });
+      });
+    }
+    // Value band: an embed or constant package holds no types and no functions,
+    // so it used to draw an empty canvas. Its consts/vars get cards too.
+    var values = visible(valuesOf(pkg), showsAll(pkg, all));
+    if (values.length) {
+      var valueY = fns.length ? bandY + Math.ceil(fns.length / PER_ROW) * 76 : bandY;
+      values.forEach(function (v, i) {
+        nodes.push({
+          id: pkg.path + "#" + v.name,
+          kind: "value",
+          x: 40 + (i % PER_ROW) * (CARD_W + 40),
+          y: valueY + Math.floor(i / PER_ROW) * 76,
+          w: CARD_W,
+          h: 60,
+          title: v.name,
+          sub: (v.kind || "var") + " " + (v.type || ""),
+          changed: !!v.changed,
+          href: pkgHash(pkg.path),
+          selected: false
         });
       });
     }
@@ -923,6 +952,7 @@
     warningSummary: warningSummary,
     packageChanged: packageChanged,
     showsAll: showsAll,
+    valuesOf: valuesOf,
     buildScene: buildScene,
     edgePath: edgePath,
     applyMoved: applyMoved,

@@ -373,9 +373,11 @@
         "data-id": n.id
       });
       var fill = n.kind === "pkg" ? "#e0e7ff" :
-        (n.kind === "func" ? "#f1f5f9" : (n.sub === "interface" ? "#fef3c7" : "#dbeafe"));
+        (n.kind === "func" ? "#f1f5f9" :
+          (n.kind === "value" ? "#f0fdf4" : (n.sub === "interface" ? "#fef3c7" : "#dbeafe")));
       var stroke = n.kind === "pkg" ? "#6366f1" :
-        (n.kind === "func" ? "#64748b" : (n.sub === "interface" ? "#d97706" : "#3b82f6"));
+        (n.kind === "func" ? "#64748b" :
+          (n.kind === "value" ? "#16a34a" : (n.sub === "interface" ? "#d97706" : "#3b82f6")));
       if (n.changed) {
         // -diff marked this type: give it the accent and a dot, so the change
         // stands out without hiding everything else.

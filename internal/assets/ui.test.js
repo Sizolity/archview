@@ -996,3 +996,31 @@ test("buildScene nodes carry a source position", () => {
   assert.equal(app.pos, "app.go:5");
   assert.equal(typeof app.pos, "string");
 });
+// A package of embed variables (internal/assets is one) has no types and no
+// functions; its variables must still reach the canvas and the card count.
+test("a package of variables gets value cards and a count", () => {
+  const model = {
+    path: "example.com/v",
+    packages: [{
+      path: "example.com/v",
+      name: "v",
+      types: [],
+      funcs: [],
+      consts: [],
+      vars: [
+        { name: "UI", type: "[]byte", exported: true },
+        { name: "JS", type: "[]byte", exported: true },
+        { name: "CSS", type: "[]byte", exported: true }
+      ]
+    }]
+  };
+  const idx = ui.indexModel(model);
+
+  const pkgScene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/v" }, false);
+  const values = pkgScene.nodes.filter((n) => n.kind === "value");
+  assert.deepEqual(values.map((n) => n.title).sort(), ["CSS", "JS", "UI"]);
+  assert.ok(values.every((n) => n.sub.indexOf("[]byte") >= 0), JSON.stringify(values.map((n) => n.sub)));
+
+  const home = ui.buildScene(model, idx, { view: "home" }, false);
+  assert.ok(home.nodes[0].lines[0].indexOf("3 变量") >= 0, home.nodes[0].lines[0]);
+});
