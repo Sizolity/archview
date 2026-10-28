@@ -622,7 +622,7 @@
       });
     }
 
-    return placed.map(function (p) {
+    var nodes = placed.map(function (p) {
       return {
         id: p.card.t.id,
         kind: "type",
@@ -641,6 +641,32 @@
         selected: selected === p.card.t.id
       };
     });
+
+    // Function band: package-level functions are nodes too. Go packages are
+    // often functions-only (a command, a helpers package), and drawing an empty
+    // canvas made those look broken. They sit under the types, four per row.
+    var fns = visible(pkg.funcs || [], showsAll(pkg, all));
+    if (fns.length) {
+      var bandY = 40;
+      nodes.forEach(function (n) { bandY = Math.max(bandY, n.y + n.h + 56); });
+      fns.forEach(function (f, i) {
+        nodes.push({
+          id: f.id || (pkg.path + "#" + f.name),
+          kind: "func",
+          x: 40 + (i % PER_ROW) * (CARD_W + 40),
+          y: bandY + Math.floor(i / PER_ROW) * 76,
+          w: CARD_W,
+          h: 60,
+          title: f.name,
+          sub: f.sig,
+          crap: f.metrics ? f.metrics.crap : null,
+          changed: !!f.changed,
+          href: pkgHash(pkg.path),
+          selected: selected === f.id
+        });
+      });
+    }
+    return nodes;
   }
 
   // typePairs lists the reference edges between the given types, deduplicated

@@ -207,7 +207,7 @@ test("buildScene draws type cards and reference edges for a package", () => {
   const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
   assert.equal(scene.kind, "types");
   assert.equal(scene.key, "pkg:example.com/app");
-  assert.deepEqual(scene.nodes.map((n) => n.id).sort(), ["example.com/app#App", "example.com/app#Server"]);
+  assert.deepEqual(scene.nodes.filter((n) => n.kind === "type").map((n) => n.id).sort(), ["example.com/app#App", "example.com/app#Server"]);
   assert.deepEqual(scene.edges, [
     { from: "example.com/app#App", to: "example.com/app#Server", ref: true }
   ]);
@@ -660,7 +660,7 @@ test("buildScene passes the layout mode through", () => {
   assert.ok(t.App.y < t.Server.y, "layered layout puts the user above the dependency");
 
   const grouped = ui.buildScene(model, idx, route, false, { layout: "kind" });
-  assert.deepEqual(grouped.nodes.map((n) => n.title), ["App", "Server"]);
+  assert.deepEqual(grouped.nodes.filter((n) => n.kind === "type").map((n) => n.title), ["App", "Server"]);
 });
 
 // ---------- 2.2 call graph ----------
@@ -814,7 +814,7 @@ test("buildScene fades the types a query does not touch", () => {
   assert.ok(plain.nodes.every((n) => !n.dim));
 
   const searched = ui.buildScene(model, idx, route, false, { query: "Store" });
-  assert.deepEqual(searched.nodes.filter((n) => n.dim).map((n) => n.title), ["App"]);
+  assert.deepEqual(searched.nodes.filter((n) => n.dim && n.kind === "type").map((n) => n.title), ["App"]);
 });
 
 test("home view fades packages whose types do not match", () => {
@@ -974,4 +974,16 @@ test("showsAll opens up a program entry", () => {
   assert.equal(ui.showsAll({ main: false }, false), false);
   assert.equal(ui.showsAll({ main: false }, true), true);
   assert.equal(ui.showsAll(null, false), false);
+});
+// A package whose declarations are functions only used to draw an empty canvas.
+test("buildScene draws function cards", () => {
+  const model = fixture();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+  const fns = scene.nodes.filter((n) => n.kind === "func");
+  assert.deepEqual(fns.map((n) => n.title).sort(), ["New"]);
+  assert.ok(fns.every((n) => typeof n.sub === "string" && n.sub.indexOf("(") === 0));
+  // The band sits below every type card.
+  const types = scene.nodes.filter((n) => n.kind === "type");
+  assert.ok(fns.every((f) => types.every((t) => f.y > t.y + t.h)));
 });
