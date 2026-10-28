@@ -128,8 +128,15 @@
   .crap.warn { background: #fef3c7; color: #92400e; }
   .crap.bad { background: #fee2e2; color: #991b1b; }
   .legend { color: var(--muted); font-size: 11px; white-space: nowrap; }
-  .cardhelp {
-    position: fixed; top: 64px; right: 18px; z-index: 20; display: none;
+  #cardhelp-btn {
+    position: fixed; right: 18px; bottom: 18px; z-index: 21;
+    padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--panel); color: #334155; font: inherit; font-size: 12px;
+    cursor: pointer; box-shadow: 0 2px 8px rgba(15,23,42,.08);
+  }
+  #cardhelp-btn:hover { border-color: #bfdbfe; background: var(--soft); }  .cardhelp {
+    position: fixed; right: 18px; bottom: 58px; z-index: 20; display: none;
+    max-height: 62vh; overflow: auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
     box-shadow: 0 8px 24px rgba(15,23,42,.12); padding: 10px 14px; font-size: 12px; color: #334155;
   }
@@ -169,13 +176,12 @@
     <button id="focus" type="button" title="只显示选中类型的一跳邻居（Esc 退出）">聚焦</button>
     <button id="fit" type="button">适应</button>
     <button id="reload" type="button">重载</button>
-    <button id="cardhelp-btn" type="button" title="卡片颜色与标记说明">卡片说明</button>
     <span id="legend" class="legend" hidden>CRAP 低 <b class="ok">≤5</b> · 中 <b class="warn">≤30</b> · 高 <b class="bad">&gt;30</b></span>
     <span id="status"></span>
   </div>
 </header>
 <div id="warnings" class="warnings" hidden></div>
-<div id="cardhelp" class="cardhelp" role="dialog" aria-label="卡片样式说明">
+<button id="cardhelp-btn" type="button" title="卡片颜色与连线说明">卡片说明</button><div id="cardhelp" class="cardhelp" role="dialog" aria-label="卡片样式说明">
   <h4>卡片颜色</h4>
   <div><span class="sw" style="background:#dbeafe;border-color:#3b82f6"></span>类型(struct / 命名类型)</div>
   <div><span class="sw" style="background:#fef3c7;border-color:#d97706"></span>接口(interface)</div>
