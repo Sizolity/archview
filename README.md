@@ -303,6 +303,12 @@ tests import `ui.js` directly.
 CI runs those four commands plus `go build ./...` on `ubuntu-latest` and
 `windows-latest` (`.github/workflows/ci.yml`).
 
+## Versioning
+
+Versions follow the rules in [RELEASING.md](RELEASING.md): a fix is a patch, a
+new flag or field is a minor, and a broken CLI/JSON/EDN contract is a major.
+Changes are recorded in [CHANGELOG.md](CHANGELOG.md), and the release workflow
+refuses a tag that has no entry there.
 ## Version
 
 A plain `go build` reports `dev`. Releases inject the version at link time:

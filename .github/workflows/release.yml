@@ -21,6 +21,16 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # A tag is a published version, so the changelog has to describe it. See
+      # RELEASING.md for the numbering rules this protects.
+      - name: changelog entry exists
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -qE "^## \[?${version}\]?( |$)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$version]' section; see RELEASING.md"
+            exit 1
+          fi
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
