@@ -365,6 +365,16 @@
   }
 
   // edgeClass names the relation so the CSS owns the look.
+  // hoverPackage lights the import edges of the package under the pointer: the
+  // module view has no selection, so this is its version of the highlight.
+  function hoverPackage(id, on) {
+    edgeEls.forEach(function (it) {
+      if (!it.el) return;
+      var touch = it.from === id || it.to === id;
+      it.el.setAttribute("class", it.cls + (on ? (touch ? " hl" : " faded") : ""));
+    });
+  }
+  var edgeEls = [];
   function edgeClass(e) {
     var cls = "edge";
     if (e.ref) cls += " ref";
@@ -394,12 +404,14 @@
     var byId = new Map();
     scene.nodes.forEach(function (n) { byId.set(n.id, n); });
 
+    edgeEls = [];
     scene.edges.forEach(function (e) {
       var a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) return;
       // With a selection, the edges that touch it stay in front and the rest
       // recede, so the card's relations read at a glance.
       var cls = edgeClass(e);
+      edgeEls.push({ el: null, from: e.from, to: e.to, cls: cls });
       if (scene.selected) {
         cls += (e.from === scene.selected || e.to === scene.selected) ? " hl" : " faded";
       }
@@ -408,6 +420,7 @@
         class: cls,
         "marker-end": "url(#" + markerFor(e) + ")"
       });
+      if (edgeEls.length) edgeEls[edgeEls.length - 1].el = p;
       if (!e.ref) {
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on.
@@ -510,6 +523,10 @@
         // never reapplied after a re-render anyway. The canvas still pans.
         state.suppressClick = false;
       });
+      if (scene.kind === "packages") {
+        g.addEventListener("mouseenter", function () { hoverPackage(n.id, true); });
+        g.addEventListener("mouseleave", function () { hoverPackage(n.id, false); });
+      }
       g.addEventListener("click", function (ev) {
         ev.stopPropagation();
         if (state.suppressClick) return;
