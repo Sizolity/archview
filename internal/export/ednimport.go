@@ -247,90 +247,130 @@ func Import(src []byte) (*model.Module, int, error) {
 	ignored := 0
 
 	for _, pv := range ednAsList(top["packages"]) {
-		pm := ednAsMap(pv)
-		if pm == nil {
-			ignored++
-			continue
+		p, n := readPackage(pv, classToType)
+		ignored += n
+		if p != nil {
+			m.Packages = append(m.Packages, p)
 		}
-		pkgID := ednAsString(pm["id"])
-		if pkgID == "" {
-			ignored++
-			continue
-		}
-		p := &model.Package{Path: pkgID, Name: ednAsString(pm["label"])}
-		if p.Name == "" {
-			p.Name = pkgID
-		}
+	}
+	ignored += readEdges(top, m, classToType)
+	sort.Slice(m.Packages, func(i, j int) bool { return m.Packages[i].Path < m.Packages[j].Path })
+	m.Edges = model.NormalizeEdges(m.Edges)
+	return m, ignored, nil
+}
 
-		for _, cv := range ednAsList(pm["classes"]) {
-			cm := ednAsMap(cv)
-			if cm == nil {
-				ignored++
-				continue
-			}
-			classID := ednAsString(cm["id"])
-			name := ednAsString(cm["name"])
-			if classID == "" || name == "" {
-				ignored++
-				continue
-			}
-			t := &model.TypeInfo{
-				ID:       pkgID + "#" + classID,
-				Name:     name,
-				Kind:     "struct",
-				Exported: true,
-			}
-			if ednAsString(cm["stereotype"]) == "interface" {
-				t.Kind = "interface"
-			}
-			for _, fv := range ednAsList(cm["fields"]) {
-				fm := ednAsMap(fv)
-				if fm == nil {
-					ignored++
-					continue
-				}
-				t.Fields = append(t.Fields, model.FieldInfo{
-					Name:     ednAsString(fm["name"]),
-					Type:     ednAsString(fm["type"]),
-					Exported: !isPrivate(fm),
-				})
-			}
-			for _, ov := range ednAsList(cm["ops"]) {
-				om := ednAsMap(ov)
-				if om == nil {
-					ignored++
-					continue
-				}
-				opName := ednAsString(om["name"])
-				if opName == "" {
-					ignored++
-					continue
-				}
-				args := ednAsStringList(om["args"])
-				sig := "()"
-				if len(args) > 0 {
-					sig = "(" + strings.Join(args, ", ") + ")"
-				}
-				if ret := ednAsString(om["returns"]); ret != "" {
-					sig += " " + ret
-				}
-				t.Methods = append(t.Methods, model.MethodInfo{
-					ID:       t.ID + "." + opName,
-					Name:     opName,
-					Sig:      sig,
-					Exported: !isPrivate(om),
-				})
-			}
-
-			p.Types = append(p.Types, t)
-			classToType[classID] = t.ID
-		}
-		if len(p.Types) > 0 {
-			sort.Slice(p.Types, func(i, j int) bool { return p.Types[i].Name < p.Types[j].Name })
-		}
-		m.Packages = append(m.Packages, p)
+// readPackage maps one :packages entry; a malformed package counts as ignored.
+func readPackage(v any, classToType map[string]string) (*model.Package, int) {
+	pm := ednAsMap(v)
+	if pm == nil {
+		return nil, 1
+	}
+	pkgID := ednAsString(pm["id"])
+	if pkgID == "" {
+		return nil, 1
+	}
+	p := &model.Package{Path: pkgID, Name: ednAsString(pm["label"])}
+	if p.Name == "" {
+		p.Name = pkgID
 	}
 
+	ignored := 0
+	for _, cv := range ednAsList(pm["classes"]) {
+		t, n := readClass(pkgID, cv, classToType)
+		ignored += n
+		if t != nil {
+			p.Types = append(p.Types, t)
+		}
+	}
+	if len(p.Types) > 0 {
+		sort.Slice(p.Types, func(i, j int) bool { return p.Types[i].Name < p.Types[j].Name })
+	}
+	return p, ignored
+}
+
+// readClass maps one :classes entry, including its fields and ops.
+func readClass(pkgID string, v any, classToType map[string]string) (*model.TypeInfo, int) {
+	cm := ednAsMap(v)
+	if cm == nil {
+		return nil, 1
+	}
+	classID := ednAsString(cm["id"])
+	name := ednAsString(cm["name"])
+	if classID == "" || name == "" {
+		return nil, 1
+	}
+	t := &model.TypeInfo{
+		ID:       pkgID + "#" + classID,
+		Name:     name,
+		Kind:     "struct",
+		Exported: true,
+	}
+	if ednAsString(cm["stereotype"]) == "interface" {
+		t.Kind = "interface"
+	}
+	ignored := readFields(t, cm) + readOps(t, cm)
+	classToType[classID] = t.ID
+	return t, ignored
+}
+
+// readFields maps :fields; a malformed field is counted and skipped.
+func readFields(t *model.TypeInfo, cm map[string]any) int {
+	ignored := 0
+	for _, fv := range ednAsList(cm["fields"]) {
+		fm := ednAsMap(fv)
+		if fm == nil {
+			ignored++
+			continue
+		}
+		t.Fields = append(t.Fields, model.FieldInfo{
+			Name:     ednAsString(fm["name"]),
+			Type:     ednAsString(fm["type"]),
+			Exported: !isPrivate(fm),
+		})
+	}
+	return ignored
+}
+
+// readOps maps :ops; the signature is rebuilt from :args and :returns.
+func readOps(t *model.TypeInfo, cm map[string]any) int {
+	ignored := 0
+	for _, ov := range ednAsList(cm["ops"]) {
+		om := ednAsMap(ov)
+		if om == nil {
+			ignored++
+			continue
+		}
+		name := ednAsString(om["name"])
+		if name == "" {
+			ignored++
+			continue
+		}
+		t.Methods = append(t.Methods, model.MethodInfo{
+			ID:       t.ID + "." + name,
+			Name:     name,
+			Sig:      opSig(om),
+			Exported: !isPrivate(om),
+		})
+	}
+	return ignored
+}
+
+// opSig rebuilds a Go signature from the IR's :args and :returns.
+func opSig(om map[string]any) string {
+	args := ednAsStringList(om["args"])
+	sig := "()"
+	if len(args) > 0 {
+		sig = "(" + strings.Join(args, ", ") + ")"
+	}
+	if ret := ednAsString(om["returns"]); ret != "" {
+		sig += " " + ret
+	}
+	return sig
+}
+
+// readEdges maps :edges onto type ids. Unknown kinds and dangling endpoints are
+// counted, not fatal.
+func readEdges(top map[string]any, m *model.Module, classToType map[string]string) int {
 	kinds := map[string]string{
 		"association": model.EdgeUses,
 		"dependency":  model.EdgeUses,
@@ -339,6 +379,7 @@ func Import(src []byte) (*model.Module, int, error) {
 		"composition": model.EdgeEmbeds,
 		"inheritance": model.EdgeEmbeds,
 	}
+	ignored := 0
 	for _, ev := range ednAsList(top["edges"]) {
 		em := ednAsMap(ev)
 		if em == nil {
@@ -354,12 +395,8 @@ func Import(src []byte) (*model.Module, int, error) {
 		}
 		m.Edges = append(m.Edges, model.Edge{Kind: kind, From: from, To: to})
 	}
-
-	sort.Slice(m.Packages, func(i, j int) bool { return m.Packages[i].Path < m.Packages[j].Path })
-	m.Edges = model.NormalizeEdges(m.Edges)
-	return m, ignored, nil
+	return ignored
 }
-
 func ednAsMap(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
