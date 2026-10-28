@@ -287,5 +287,6 @@ How a scan becomes a page, the model schema and the trade-offs:
 
 Unimplemented features with acceptance criteria live in [ROADMAP.md](ROADMAP.md).
 
+## License
 
-
+MIT — see [LICENSE](LICENSE).

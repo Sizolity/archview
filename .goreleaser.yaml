@@ -25,6 +25,7 @@ archives:
     files:
       - README.md
       - ROADMAP.md
+      - LICENSE
 
 checksum:
   name_template: checksums.txt
