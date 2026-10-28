@@ -55,6 +55,7 @@
     border-bottom: 1px solid #fde68a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   main { display: flex; height: calc(100vh - 56px); }
   #canvas {
+    position: relative;
     position: relative; flex: 1; min-width: 0; overflow: hidden;
     background-color: var(--bg);
     background-image: radial-gradient(#dbe3ec 1px, transparent 1px);
@@ -129,7 +130,8 @@
   .crap.bad { background: #fee2e2; color: #991b1b; }
   .legend { color: var(--muted); font-size: 11px; white-space: nowrap; }
   .cardhelp {
-    position: fixed; right: 18px; bottom: 18px; z-index: 20; display: block;
+    position: absolute; right: 12px; bottom: 12px; z-index: 5; display: block;
+    background: rgba(255,255,255,.92);
     max-height: 62vh; overflow: auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
     box-shadow: 0 8px 24px rgba(15,23,42,.12); padding: 8px 12px; font-size: 11px; color: #334155;
@@ -175,34 +177,20 @@
   </div>
 </header>
 <div id="warnings" class="warnings" hidden></div>
-<div id="cardhelp" class="cardhelp" role="dialog" aria-label="卡片样式说明">
-  <h4>卡片颜色</h4>
-  <div><span class="sw" style="background:#dbeafe;border-color:#3b82f6"></span>类型(struct / 命名类型)</div>
-  <div><span class="sw" style="background:#fef3c7;border-color:#d97706"></span>接口(interface)</div>
-  <div><span class="sw" style="background:#f1f5f9;border-color:#64748b"></span>函数(包级)</div>
-  <div><span class="sw" style="background:#f0fdf4;border-color:#16a34a"></span>常量 / 变量</div>
-  <h4>标记</h4>
-  <div><span class="sw" style="background:#ecfeff;border-color:#0e7490;width:24px"></span>入口:程序入口(<code>package main</code>)</div>
-  <div><span class="sw" style="background:#fff;border-color:#ea580c;width:24px"></span>改动:<code>-diff</code> 标记的声明</div>
-  <div><span class="sw" style="background:#dcfce7;border-color:#16a34a"></span>CRAP 低 / <span class="sw" style="background:#fef3c7;border-color:#d97706"></span>中 / <span class="sw" style="background:#fee2e2;border-color:#dc2626"></span>高</div>
-  <h4>连线</h4>
-  <div><span class="swline"></span>包依赖(模块视图),箭头指向被依赖方</div>
-  <div><span class="swline" style="border-top-color:#8b5cf6;border-top-style:dashed"></span><code>uses</code>:字段/签名引用</div>
-  <div><span class="swline" style="border-top-color:#16a34a"></span><code>implements</code>:实现接口</div>
-  <div><span class="swline" style="border-top-color:#2563eb"></span><code>embeds</code>:嵌入</div>
-  <div><span class="swline" style="border-top-color:#0891b2"></span>调用(静态) <span class="swline" style="border-top-color:#0891b2;border-top-style:dashed"></span>接口调用(动态)</div>
-  <div><span class="swline" style="border-top-color:#dc2626;border-top-width:3px"></span>分层违规:下层依赖了上层</div>
-  <div>所有箭头方向一致:<b>A → B 表示 A 依赖 B</b></div>  <h4>操作</h4>
-  <div>单击卡片 → 选中并在右侧看详情</div>
-  <div>双击卡片 → 打开源码</div>
-  <div><code>… 还有 N 条(点击查看详情)</code> → 完整成员列表</div>
-  <div>悬停卡片 → 未截断的全文</div>
-</div>
+
 <main>
   <section id="canvas">
     <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="hint">拖拽平移 · 滚轮缩放 · 点击方框下钻</div>
-  </section>
+    <div id="cardhelp" class="cardhelp" aria-label="样式说明">
+      <div><b>卡片</b> <span class="sw" style="background:#dbeafe;border-color:#3b82f6"></span>类型
+        <span class="sw" style="background:#fef3c7;border-color:#d97706"></span>接口
+        <span class="sw" style="background:#f1f5f9;border-color:#64748b"></span>函数
+        <span class="sw" style="background:#f0fdf4;border-color:#16a34a"></span>变量</div>
+      <div><b>标记</b> <span class="sw" style="background:#ecfeff;border-color:#0e7490"></span>入口
+        <span class="sw" style="background:#fff;border-color:#ea580c"></span>改动</div>
+      <div><b>连线</b> 灰 依赖 · 紫虚线 uses · 绿 implements · 蓝 embeds · 青 调用 · 红 违规,箭头指向被依赖方</div>
+    </div>  </section>
   <aside id="side"></aside>
 </main>
 <!-- archview:data -->
