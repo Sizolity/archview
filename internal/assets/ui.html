@@ -394,8 +394,9 @@
     var defs = el("defs");
     MARKERS.forEach(function (m) {
       var marker = el("marker", {
-        id: m.id, viewBox: "0 0 10 10", refX: "9", refY: "5",
-        markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse"
+        id: m.id, viewBox: "0 0 10 10", refX: "10", refY: "5",
+        markerWidth: "9", markerHeight: "9", markerUnits: "userSpaceOnUse",
+        orient: "auto-start-reverse"
       });
       marker.appendChild(el("path", { d: "M0,0 L10,5 L0,10 z", fill: m.fill }));
       defs.appendChild(marker);
@@ -413,8 +414,15 @@
       var a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) return;
       var cls = edgeClass(e);
+      // A call edge stops 10px short of the target card, so its arrowhead is not
+      // painted under the card's own rect.
+      var target = b;
+      if (e.call || e.callOnly) {
+        target = { x: b.x, y: b.y, w: b.w, h: b.h };
+        if (scene.axis === "v") target.y = b.y - 10; else target.x = b.x - 10;
+      }
       var p = el("path", {
-        d: A.edgePath(a, b, scene.axis),
+        d: A.edgePath(a, target, scene.axis),
         class: cls,
         "marker-end": "url(#" + markerFor(e) + ")"
       });
