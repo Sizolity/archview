@@ -465,6 +465,16 @@
     return Number(v).toFixed(1);
   }
 
+  // warningSummary folds the model's warnings into one banner-sized line. They
+  // are the only place a failed scan step says so, so the page has to show them.
+  function warningSummary(model) {
+    var list = (model && model.warnings) || [];
+    if (!list.length) return null;
+    var first = String(list[0]);
+    if (first.length > 120) first = first.slice(0, 117) + "…";
+    return { count: list.length, text: first, all: list.join("\n") };
+  }
+
   // typeChanged reports whether the -diff run touched this type or any of its
   // members.
   function typeChanged(t) {
@@ -857,6 +867,7 @@
     formatCrap: formatCrap,
     typeCrap: typeCrap,
     typeChanged: typeChanged,
+    warningSummary: warningSummary,
     buildScene: buildScene,
     edgePath: edgePath,
     applyMoved: applyMoved,

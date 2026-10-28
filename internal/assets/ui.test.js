@@ -949,3 +949,16 @@ test("typeChanged marks a type touched by the diff", () => {
   assert.equal(ui.typeChanged({ methods: [{ changed: false }] }), false);
   assert.equal(ui.typeChanged(undefined), false);
 });
+// ---------- warnings ----------
+
+test("warningSummary folds warnings into one line", () => {
+  assert.equal(ui.warningSummary({}), null);
+  assert.equal(ui.warningSummary({ warnings: [] }), null);
+  const one = ui.warningSummary({ warnings: ["CRAP 指标不可用: boom"] });
+  assert.equal(one.count, 1);
+  assert.equal(one.text, "CRAP 指标不可用: boom");
+  const many = ui.warningSummary({ warnings: ["a", "b"] });
+  assert.equal(many.count, 2);
+  assert.equal(many.all, "a\nb");
+  assert.ok(ui.warningSummary({ warnings: ["x".repeat(200)] }).text.length <= 120);
+});

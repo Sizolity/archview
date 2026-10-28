@@ -77,6 +77,7 @@ func markDiff(ctx context.Context, m *model.Module, ref string) {
 	}
 	changes, err := diff.Run(ctx, m.Root, ref)
 	if err != nil {
+		slog.Warn("改动范围不可用", "ref", ref, "err", model.OneLine(err.Error()))
 		m.Warnings = append(m.Warnings, "改动范围不可用: "+model.OneLine(err.Error()))
 		return
 	}

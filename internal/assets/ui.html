@@ -45,6 +45,8 @@
   }
   .check { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
   #status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .warnings { padding: 6px 14px; font-size: 12px; color: #92400e; background: #fffbeb;
+    border-bottom: 1px solid #fde68a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   main { display: flex; height: calc(100vh - 56px); }
   #canvas {
     position: relative; flex: 1; min-width: 0; overflow: hidden;
@@ -152,6 +154,7 @@
     <span id="status"></span>
   </div>
 </header>
+<div id="warnings" class="warnings" hidden></div>
 <main>
   <section id="canvas">
     <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -250,6 +253,20 @@
     document.getElementById("brand").textContent = short(state.model.path);
     idx = A.indexModel(state.model);
     updateStatus();
+    renderWarnings();
+  }
+
+  // renderWarnings puts the model's warnings on screen. A step that failed
+  // (go-crap, git diff, a package that does not type-check) only says so here;
+  // hiding them made a missing feature look like a missing bug.
+  function renderWarnings() {
+    var box = document.getElementById("warnings");
+    if (!box) return;
+    var w = A.warningSummary(state.model);
+    if (!w) { box.hidden = true; return; }
+    box.hidden = false;
+    box.textContent = "⚠ " + w.count + " 条警告 · " + w.text;
+    box.title = w.all;
   }
 
   function updateStatus() {
