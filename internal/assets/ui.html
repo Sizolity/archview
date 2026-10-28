@@ -418,7 +418,8 @@
           g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + i * 17, class: "row" }, cut(row, 42)));
         });
         if (n.more > 0) {
-          var moreText = el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind" },
+          var moreText = el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind",
+            style: "pointer-events: all; cursor: pointer; text-decoration: underline", fill: "#2563eb" },
             "… 还有 " + n.more + " 条(点击展开)");
           moreText.addEventListener("click", function (ev) {
             ev.stopPropagation();
