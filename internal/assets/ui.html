@@ -420,14 +420,12 @@
         if (n.more > 0) {
           var moreText = el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind",
             style: "pointer-events: all; cursor: pointer; text-decoration: underline", fill: "#2563eb" },
-            "… 还有 " + n.more + " 条(点击展开)");
+            "… 还有 " + n.more + " 条(点击查看详情)");
           moreText.addEventListener("click", function (ev) {
             ev.stopPropagation();
-            state.expanded = state.expanded.indexOf(n.id) >= 0
-              ? state.expanded.filter(function (x) { return x !== n.id; })
-              : state.expanded.concat([n.id]);
-            state.sceneKey = "";
-            render();
+            // Open the inspector instead of growing the card: the layout stays
+            // put, so the viewport and the zoom do not move.
+            go(A.typeHash(n.id));
           });
           g.appendChild(moreText);
         }
