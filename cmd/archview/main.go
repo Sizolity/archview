@@ -102,6 +102,40 @@ func defaultCacheDir() string {
 	return filepath.Join(d, "archview")
 }
 
+// cliFlags is the parsed command line. Grouping it here keeps run readable and
+// lets parseFlags be tested on its own.
+type cliFlags struct {
+	addr, editor, out, ednOut, importPath, crapCmd, crapProfile string
+	cacheDir, configPath, dir, diffRef                          string
+	noCrapCache, noCrap, watch, showVersion                     bool
+}
+
+func parseFlags(args []string) (*cliFlags, map[string]bool, error) {
+	fs := flag.NewFlagSet("archview", flag.ContinueOnError)
+	f := &cliFlags{}
+	fs.StringVar(&f.addr, "addr", "127.0.0.1:8788", "监听地址(默认只绑回环)")
+	fs.StringVar(&f.editor, "editor", "source", "源码跳转方式: source|vscode|goland|file|none")
+	fs.StringVar(&f.out, "out", "", "把自包含页面写到该文件后退出(单文件导出)")
+	fs.StringVar(&f.ednOut, "edn", "", "把 uml-viewer 拓扑 IR 写到该文件后退出")
+	fs.StringVar(&f.importPath, "import-edn", "", "读取 uml-viewer IR 并直接渲染(不扫描代码)")
+	fs.StringVar(&f.crapCmd, "crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
+	fs.StringVar(&f.crapProfile, "crap-profile", "", "已有覆盖率文件(go test -coverprofile 产出),给出则不跑测试")
+	fs.BoolVar(&f.noCrapCache, "no-crap-cache", false, "不缓存 CRAP 报告(默认缓存在用户缓存目录)")
+	fs.StringVar(&f.cacheDir, "cache-dir", "", "缓存目录(默认用户缓存目录;空表示默认)")
+	fs.BoolVar(&f.noCrap, "no-crap", false, "跳过 CRAP 指标")
+	fs.StringVar(&f.configPath, "config", "", "配置文件路径(默认读当前目录的 "+config.DefaultFile+")")
+	fs.StringVar(&f.dir, "dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
+	fs.StringVar(&f.diffRef, "diff", "", "把工作区相对该 git 引用的改动标在函数/类型上(如 HEAD、HEAD~1)")
+	fs.BoolVar(&f.watch, "watch", false, "轮询源码变化,通过 SSE 通知页面自动重载")
+	fs.BoolVar(&f.showVersion, "version", false, "打印版本后退出")
+	if err := fs.Parse(args); err != nil {
+		return nil, nil, err
+	}
+	set := map[string]bool{}
+	fs.Visit(func(x *flag.Flag) { set[x.Name] = true })
+	return f, set, nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -129,27 +163,11 @@ func (e *exitError) Error() string { return e.err.Error() }
 // used to be untestable -- a bad config, a failed import, a busy port -- can be
 // asserted in a test.
 func run(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("archview", flag.ContinueOnError)
-	addr := fs.String("addr", "127.0.0.1:8788", "监听地址(默认只绑回环)")
-	editor := fs.String("editor", "source", "源码跳转方式: source|vscode|goland|file|none")
-	out := fs.String("out", "", "把自包含页面写到该文件后退出(单文件导出)")
-	ednOut := fs.String("edn", "", "把 uml-viewer 拓扑 IR 写到该文件后退出")
-	importPath := fs.String("import-edn", "", "读取 uml-viewer IR 并直接渲染(不扫描代码)")
-	crapCmd := fs.String("crap-cmd", "go-crap", "CRAP 报告命令(调用 scan -f json)")
-	crapProfile := fs.String("crap-profile", "", "已有覆盖率文件(go test -coverprofile 产出),给出则不跑测试")
-	noCrapCache := fs.Bool("no-crap-cache", false, "不缓存 CRAP 报告(默认缓存在用户缓存目录)")
-	cacheDirFlag := fs.String("cache-dir", "", "缓存目录(默认用户缓存目录;空表示默认)")
-	noCrap := fs.Bool("no-crap", false, "跳过 CRAP 指标")
-	configPath := fs.String("config", "", "配置文件路径(默认读当前目录的 "+config.DefaultFile+")")
-	dir := fs.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
-	diffRef := fs.String("diff", "", "把工作区相对该 git 引用的改动标在函数/类型上(如 HEAD、HEAD~1)")
-	watch := fs.Bool("watch", false, "轮询源码变化,通过 SSE 通知页面自动重载")
-	showVersion := fs.Bool("version", false, "打印版本后退出")
-	if err := fs.Parse(args); err != nil {
+	f, set, err := parseFlags(args)
+	if err != nil {
 		return err
 	}
-
-	if *showVersion {
+	if f.showVersion {
 		fmt.Println("archview " + version)
 		return nil
 	}
@@ -157,10 +175,7 @@ func run(ctx context.Context, args []string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-
-	cfg, err := config.Load(*configPath, set["config"])
+	cfg, err := config.Load(f.configPath, set["config"])
 	if err != nil {
 		return &exitError{code: 2, err: fmt.Errorf("配置无效: %w", err)}
 	}
@@ -168,32 +183,32 @@ func run(ctx context.Context, args []string) error {
 		logger.Info("已读取配置", "path", cfg.Path)
 	}
 
-	mode := config.Editor(cfg, *editor, set["editor"])
-	if set["editor"] && mode != *editor {
-		logger.Warn("未知的 -editor,回退到内置源码页", "editor", *editor)
+	mode := config.Editor(cfg, f.editor, set["editor"])
+	if set["editor"] && mode != f.editor {
+		logger.Warn("未知的 -editor,回退到内置源码页", "editor", f.editor)
 	}
 
-	noMetrics := *noCrap
+	noMetrics := f.noCrap
 	if !set["no-crap"] && cfg.Metrics.Enabled != nil {
 		noMetrics = !*cfg.Metrics.Enabled
 	}
 
 	// collect runs go-crap once per model build, or not at all.
 	var collect func(context.Context, string) *crap.Bundle
-	if !noMetrics && *importPath == "" {
+	if !noMetrics && f.importPath == "" {
 		var crapArgs []string
-		if *crapProfile != "" {
-			crapArgs = append(crapArgs, "--coverage-profile", *crapProfile)
+		if f.crapProfile != "" {
+			crapArgs = append(crapArgs, "--coverage-profile", f.crapProfile)
 		}
-		cacheDir := *cacheDirFlag
+		cacheDir := f.cacheDir
 		if cacheDir == "" {
 			cacheDir = defaultCacheDir()
 		}
-		if *noCrapCache {
+		if f.noCrapCache {
 			cacheDir = ""
 		}
 		collect = func(c context.Context, dir string) *crap.Bundle {
-			return crap.CollectCached(c, dir, *crapCmd, crapArgs, cacheDir)
+			return crap.CollectCached(c, dir, f.crapCmd, crapArgs, cacheDir)
 		}
 	}
 
@@ -201,15 +216,15 @@ func run(ctx context.Context, args []string) error {
 	// tree as the model, so the cache can hand the result to every request
 	// without anyone mutating it.
 	loadFn := func(c context.Context, dir string) (*model.Module, error) {
-		return loadModel(c, dir, cfg, mode, collect, *diffRef)
+		return loadModel(c, dir, cfg, mode, collect, f.diffRef)
 	}
 
 	var m *model.Module
 	var cached *cache.Cache
 	var load func(context.Context) (*model.Module, error)
-	if *importPath != "" {
+	if f.importPath != "" {
 		// An imported IR replaces the scan entirely: there is no module to read.
-		data, err := os.ReadFile(*importPath)
+		data, err := os.ReadFile(f.importPath)
 		if err != nil {
 			return fmt.Errorf("读取 EDN 失败: %w", err)
 		}
@@ -220,10 +235,10 @@ func run(ctx context.Context, args []string) error {
 		imported.Editor = mode
 		m = imported
 		load = func(context.Context) (*model.Module, error) { return imported, nil }
-		logger.Info("已导入 EDN", "path", *importPath, "packages", len(m.Packages),
+		logger.Info("已导入 EDN", "path", f.importPath, "packages", len(m.Packages),
 			"edges", len(m.Edges), "ignored", ignored)
 	} else {
-		cached = cache.New(*dir, loadFn)
+		cached = cache.New(f.dir, loadFn)
 		m, err = cached.Load(ctx)
 		if err != nil {
 			return fmt.Errorf("扫描模块失败: %w", err)
@@ -232,44 +247,50 @@ func run(ctx context.Context, args []string) error {
 		logger.Info("索引完成", "packages", len(m.Packages), "root", m.Root, "layers", len(cfg.Layers))
 	}
 
-	if *out != "" || *ednOut != "" {
-		if *out != "" {
-			// Metrics and editor mode are already on the model; a static page
-			// has no /source endpoint, so "source" degrades to file:// links.
-			m.Editor = export.StaticEditor(mode)
-			page, err := export.HTML(assets.UI, assets.JS, m)
-			if err != nil {
-				return fmt.Errorf("导出失败: %w", err)
-			}
-			if err := os.WriteFile(*out, page, 0o644); err != nil {
-				return fmt.Errorf("写文件失败: %w", err)
-			}
-			logger.Info("已导出单文件页面", "path", *out, "bytes", len(page))
-		}
-		if *ednOut != "" {
-			ir := export.EDN(m)
-			if err := os.WriteFile(*ednOut, ir, 0o644); err != nil {
-				return fmt.Errorf("写文件失败: %w", err)
-			}
-			logger.Info("已导出 EDN", "path", *ednOut, "bytes", len(ir))
-		}
-		return nil
+	if f.out != "" || f.ednOut != "" {
+		return writeOutputs(m, mode, f.out, f.ednOut, logger)
 	}
 
 	srv := &web.Server{Root: m.Root, UI: assets.UI, JS: assets.JS, CSS: assets.CSS, Ctx: ctx, Load: load}
-	if *watch && cached != nil {
+	switch {
+	case f.watch && cached != nil:
 		srv.Watch = cache.NewWatcher()
 		go cache.WatchLoop(ctx, cached, srv.Watch, 500*time.Millisecond)
-	}
-	if *watch && cached == nil {
+	case f.watch:
 		logger.Warn("-watch 对导入的 EDN 无效,已忽略")
 	}
+	return serve(ctx, srv, f.addr, logger)
+}
 
-	httpSrv := &http.Server{
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
+// writeOutputs renders the model to the files -out and -edn asked for.
+func writeOutputs(m *model.Module, mode, out, ednOut string, logger *slog.Logger) error {
+	if out != "" {
+		// Metrics and editor mode are already on the model; a static page has no
+		// /source endpoint, so "source" degrades to file:// links.
+		m.Editor = export.StaticEditor(mode)
+		page, err := export.HTML(assets.UI, assets.JS, m)
+		if err != nil {
+			return fmt.Errorf("导出失败: %w", err)
+		}
+		if err := os.WriteFile(out, page, 0o644); err != nil {
+			return fmt.Errorf("写文件失败: %w", err)
+		}
+		logger.Info("已导出单文件页面", "path", out, "bytes", len(page))
 	}
-	ln, err := net.Listen("tcp", *addr)
+	if ednOut != "" {
+		ir := export.EDN(m)
+		if err := os.WriteFile(ednOut, ir, 0o644); err != nil {
+			return fmt.Errorf("写文件失败: %w", err)
+		}
+		logger.Info("已导出 EDN", "path", ednOut, "bytes", len(ir))
+	}
+	return nil
+}
+
+// serve runs the HTTP server until the context is cancelled.
+func serve(ctx context.Context, srv *web.Server, addr string, logger *slog.Logger) error {
+	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("监听失败: %w", err)
 	}
