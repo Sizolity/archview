@@ -1,4 +1,11 @@
-// Package main implements a read-only architecture explorer for a Go module.
+// Package model turns a Go module into the graph the viewer renders: packages,
+// types, fields, methods and the relations between them.
+//
+// The scan is a pipeline — `go list` for the package layout, go/parser for the
+// declarations, go/types for what the syntax alone cannot answer (interface
+// satisfaction, embedding), and a body walk for the call graph. A package that
+// fails to type-check becomes a warning on the model instead of aborting the
+// scan, so a module that is mid-edit still renders.
 package model
 
 import (
