@@ -113,3 +113,26 @@ func TestMainPackageIsMarked(t *testing.T) {
 		t.Fatalf("packages = %+v", m.Packages)
 	}
 }
+
+// Values need a position too: the page opens their source on double-click.
+func TestValuePositions(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/v\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := "package v\n\nconst K = 1\n\nvar X = 2\n"
+	if err := os.WriteFile(filepath.Join(dir, "v.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadWith(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := m.Packages[0]
+	if len(p.Consts) != 1 || p.Consts[0].Pos != "v.go:3" {
+		t.Fatalf("consts = %+v", p.Consts)
+	}
+	if len(p.Vars) != 1 || p.Vars[0].Pos != "v.go:5" {
+		t.Fatalf("vars = %+v", p.Vars)
+	}
+}

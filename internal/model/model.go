@@ -123,6 +123,7 @@ type ValueInfo struct {
 	Type     string `json:"type,omitempty"`
 	Value    string `json:"value,omitempty"`
 	Doc      string `json:"doc,omitempty"`
+	Pos      string `json:"pos,omitempty"`
 	Exported bool   `json:"exported"`
 }
 
@@ -446,7 +447,8 @@ func (b *builder) parseFile(f *ast.File) {
 						val = exprText(b.fset, vs.Values[0])
 					}
 					for _, nm := range vs.Names {
-						v := &ValueInfo{Name: nm.Name, Type: tv, Value: val, Doc: doc, Exported: nm.IsExported()}
+						v := &ValueInfo{Name: nm.Name, Type: tv, Value: val, Doc: doc,
+							Pos: b.pos(nm.Pos()), Exported: nm.IsExported()}
 						if dd.Tok == token.CONST {
 							b.rootDoc.Consts = append(b.rootDoc.Consts, v)
 						} else {

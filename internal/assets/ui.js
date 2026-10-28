@@ -693,6 +693,7 @@
           h: 60,
           title: v.name,
           sub: (v.kind || "var") + " " + (v.type || ""),
+          pos: v.pos,
           changed: !!v.changed,
           href: pkgHash(pkg.path),
           selected: false

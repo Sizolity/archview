@@ -465,7 +465,7 @@
       // diagram, so the next thing to read is the code itself.
       g.addEventListener("dblclick", function (ev) {
         ev.stopPropagation();
-        if (n.kind !== "type" && n.kind !== "func") return;
+        if (n.kind !== "type" && n.kind !== "func" && n.kind !== "value") return;
         var href = A.editorHref(state.model.editor, state.model.root, n.pos);
         if (!href) return;
         if (href.indexOf("/source?") === 0) {
