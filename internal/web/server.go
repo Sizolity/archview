@@ -15,6 +15,10 @@ import (
 	"github.com/Sizolity/archview/internal/model"
 )
 
+// modelBuildTimeout bounds one scan. It has to cover go-crap, which runs the
+// module's tests for coverage; a client giving up must not shorten it.
+const modelBuildTimeout = 2 * time.Minute
+
 // Server serves the explorer UI, the model snapshot and a read-only source view.
 // Load may return a shared, read-only model (the cache hands out one pointer),
 // so handlers must not mutate it.
@@ -24,7 +28,10 @@ type Server struct {
 	UI    []byte
 	JS    []byte
 	CSS   []byte
-	Load  func(context.Context) (*model.Module, error)
+	// Ctx bounds a model build. It is the process lifetime, not the request:
+	// a scan must finish even when the page that asked for it is gone.
+	Ctx  context.Context
+	Load func(context.Context) (*model.Module, error)
 }
 
 // Handler returns the read-only HTTP surface.
@@ -52,7 +59,15 @@ func (s *Server) script(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) model(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	// The build outlives the request: a scan includes go-crap's `go test`, and
+	// tying that to the client meant a client that gave up (or a timeout) killed
+	// the scan and the scores with it. The result lands in the cache either way,
+	// so the next request is cheap.
+	base := s.Ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, modelBuildTimeout)
 	defer cancel()
 
 	m, err := s.Load(ctx)

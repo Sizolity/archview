@@ -30,6 +30,39 @@ import (
 // version is injected by goreleaser via -ldflags "-X main.version=...".
 var version = "dev"
 
+// loadModel scans dir and attaches the editor mode plus a fresh CRAP snapshot.
+//
+// The snapshot is taken here, not once at startup: go-crap keys its report by
+// file:line, so a reload that shifts a single line would leave most scores
+// unmatched if the snapshot were older than the model. collect is nil when the
+// scores are switched off.
+func loadModel(ctx context.Context, dir string, cfg *config.Config, mode string,
+	collect func(context.Context, string) *crap.Bundle) (*model.Module, error) {
+	m, err := model.LoadWith(ctx, dir, cfg)
+	if err != nil {
+		return nil, err
+	}
+	m.Editor = mode
+	if collect == nil {
+		return m, nil
+	}
+
+	started := time.Now()
+	b := collect(ctx, dir)
+	b.Thresholds = cfg.Metrics.Thresholds
+	matched := b.Apply(m)
+	switch {
+	case len(b.Warnings) > 0:
+		slog.Warn("CRAP 指标不可用,页面不显示分数", "reason", b.Warnings[0])
+	case matched == 0:
+		slog.Warn("CRAP 报告没有对上任何函数,页面不显示分数", "functions", len(b.ByKey))
+	default:
+		slog.Info("CRAP 指标已采集", "matched", matched, "functions", len(b.ByKey),
+			"took", time.Since(started).Round(time.Millisecond))
+	}
+	return m, nil
+}
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8788", "监听地址(默认只绑回环)")
 	editor := flag.String("editor", "source", "源码跳转方式: source|vscode|goland|file|none")
@@ -77,29 +110,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	metrics := &crap.Bundle{Thresholds: cfg.Metrics.Thresholds}
+	// collect runs go-crap once per model build, or not at all.
+	var collect func(context.Context, string) *crap.Bundle
 	if !noMetrics && *importPath == "" {
-		started := time.Now()
-		metrics = crap.Collect(ctx, *dir, *crapCmd)
-		metrics.Thresholds = cfg.Metrics.Thresholds
-		if len(metrics.Warnings) > 0 {
-			logger.Warn("CRAP 指标不可用,页面不显示分数", "reason", metrics.Warnings[0])
-		} else {
-			logger.Info("CRAP 指标已采集",
-				"functions", len(metrics.ByKey), "took", time.Since(started).Round(time.Millisecond))
+		collect = func(c context.Context, dir string) *crap.Bundle {
+			return crap.Collect(c, dir, *crapCmd)
 		}
 	}
 
-	// The loader applies the editor mode and the metrics snapshot, so the cache
-	// can hand the same model to every request without anyone mutating it.
+	// The loader applies the editor mode and a CRAP snapshot taken from the same
+	// tree as the model, so the cache can hand the result to every request
+	// without anyone mutating it.
 	loadFn := func(c context.Context, dir string) (*model.Module, error) {
-		m, err := model.LoadWith(c, dir, cfg)
-		if err != nil {
-			return nil, err
-		}
-		m.Editor = mode
-		metrics.Apply(m)
-		return m, nil
+		return loadModel(c, dir, cfg, mode, collect)
 	}
 
 	var m *model.Module
@@ -160,7 +183,7 @@ func main() {
 		return
 	}
 
-	srv := &web.Server{Root: m.Root, UI: assets.UI, JS: assets.JS, CSS: assets.CSS, Load: load}
+	srv := &web.Server{Root: m.Root, UI: assets.UI, JS: assets.JS, CSS: assets.CSS, Ctx: ctx, Load: load}
 	if *watch && cached != nil {
 		srv.Watch = cache.NewWatcher()
 		go cache.WatchLoop(ctx, cached, srv.Watch, 500*time.Millisecond)

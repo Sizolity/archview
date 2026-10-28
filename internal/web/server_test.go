@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Sizolity/archview/internal/model"
 )
@@ -174,5 +175,45 @@ func TestSourceEscapesInvalidUTF8(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;b&gt;raw&lt;/b&gt;") {
 		t.Fatalf("expected escaped markup, got %q", body)
+	}
+}
+
+type ctxKey string
+
+// The model build is bounded by the process context, not by the request: a scan
+// runs go-crap (which runs the module's tests) and used to be cut off after 15
+// seconds, losing every score on the reload that triggered it.
+func TestModelBuildUsesServerContext(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxKey("k"), "v")
+	var sawValue any
+	var budget time.Duration
+	s := &Server{
+		Ctx: base,
+		UI:  []byte("ui"),
+		JS:  []byte("js"),
+		Load: func(ctx context.Context) (*model.Module, error) {
+			sawValue = ctx.Value(ctxKey("k"))
+			if d, ok := ctx.Deadline(); ok {
+				budget = time.Until(d)
+			}
+			return &model.Module{Root: "."}, nil
+		},
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/model.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /model.json = %d", resp.StatusCode)
+	}
+	if sawValue != "v" {
+		t.Fatalf("build context does not come from Server.Ctx: %v", sawValue)
+	}
+	if budget < time.Minute {
+		t.Fatalf("build budget = %v, want well over the old 15s", budget)
 	}
 }

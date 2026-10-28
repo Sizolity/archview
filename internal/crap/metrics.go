@@ -32,9 +32,9 @@ type crapReport struct {
 	} `json:"entries"`
 }
 
-// Bundle is one go-crap run, kept for the life of the process. The
-// model is rebuilt per request; the metrics snapshot is not, so a scan costs
-// one `go test` at startup instead of one per page load.
+// Bundle is one go-crap run. It is keyed by file:line, so it is only valid for
+// the tree it was collected from: a rescan that shifts a line invalidates most
+// keys. Collect it next to the model it describes, never once at startup.
 type Bundle struct {
 	ByKey      map[string]model.Metrics
 	Summary    model.MetricsSummary
@@ -79,7 +79,13 @@ func runCrap(ctx context.Context, dir, command string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("%s scan: %w: %s", command, err, model.OneLine(stderr.String()))
+		// go-crap reports some failures on stdout and leaves stderr empty, so
+		// the message carries whichever stream said something.
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = model.OneLine(string(out))
+		}
+		return nil, fmt.Errorf("%s scan: %w: %s", command, err, detail)
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		return nil, fmt.Errorf("%s scan: 空输出", command)
