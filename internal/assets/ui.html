@@ -857,7 +857,7 @@
       // reapplied on the next render (editing code, switching filters).
       var dx = (e.clientX - nodeDrag.sx) / state.k;
       var dy = (e.clientY - nodeDrag.sy) / state.k;
-      if (Math.abs(dx) + Math.abs(dy) > 2) nodeDrag.moved = true;
+      if (Math.abs(dx) + Math.abs(dy) > 6) nodeDrag.moved = true;
       var pos = { x: nodeDrag.ox + dx, y: nodeDrag.oy + dy };
       state.moved[nodeDrag.id] = pos;
       state.scene.nodes.forEach(function (n) {
@@ -874,6 +874,11 @@
   window.addEventListener("mouseup", function () {
     if (nodeDrag) {
       state.suppressClick = nodeDrag.moved;
+      // A shaky click must not swallow the next one: the flag is cleared even
+      // if no click event ever follows the drag.
+      if (typeof setTimeout === "function") {
+        setTimeout(function () { state.suppressClick = false; }, 350);
+      }
       nodeDrag = null;
       return;
     }
