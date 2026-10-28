@@ -139,6 +139,8 @@
   .cardhelp .sw { display: inline-block; width: 12px; height: 12px; margin-right: 8px;
     border-radius: 3px; border: 1px solid #94a3b8; vertical-align: -2px; }
   .cardhelp code { font-size: 11px; color: #475569; }
+  .cardhelp .swline { display: inline-block; width: 26px; height: 0; margin-right: 8px;
+    border-top: 2px solid #94a3b8; vertical-align: 3px; }
   .legend b { font-weight: 600; }
   .legend b.ok { color: #166534; }
   .legend b.warn { color: #92400e; }
@@ -183,7 +185,14 @@
   <div><span class="sw" style="background:#ecfeff;border-color:#0e7490;width:24px"></span>入口:程序入口(<code>package main</code>)</div>
   <div><span class="sw" style="background:#fff;border-color:#ea580c;width:24px"></span>改动:<code>-diff</code> 标记的声明</div>
   <div><span class="sw" style="background:#dcfce7;border-color:#16a34a"></span>CRAP 低 / <span class="sw" style="background:#fef3c7;border-color:#d97706"></span>中 / <span class="sw" style="background:#fee2e2;border-color:#dc2626"></span>高</div>
-  <h4>操作</h4>
+  <h4>连线</h4>
+  <div><span class="swline"></span>包依赖(模块视图),箭头指向被依赖方</div>
+  <div><span class="swline" style="border-top-color:#8b5cf6;border-top-style:dashed"></span><code>uses</code>:字段/签名引用</div>
+  <div><span class="swline" style="border-top-color:#16a34a"></span><code>implements</code>:实现接口</div>
+  <div><span class="swline" style="border-top-color:#2563eb"></span><code>embeds</code>:嵌入</div>
+  <div><span class="swline" style="border-top-color:#0891b2"></span>调用(静态) <span class="swline" style="border-top-color:#0891b2;border-top-style:dashed"></span>接口调用(动态)</div>
+  <div><span class="swline" style="border-top-color:#dc2626;border-top-width:3px"></span>分层违规:下层依赖了上层</div>
+  <div>所有箭头方向一致:<b>A → B 表示 A 依赖 B</b></div>  <h4>操作</h4>
   <div>单击卡片 → 选中并在右侧看详情</div>
   <div>双击卡片 → 打开源码</div>
   <div><code>… 还有 N 条(点击查看详情)</code> → 完整成员列表</div>
