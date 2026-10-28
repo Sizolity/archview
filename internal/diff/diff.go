@@ -100,7 +100,7 @@ func Apply(m *model.Module, c *Changes) bool {
 	if c == nil || len(c.Files) == 0 {
 		return false
 	}
-	var files, funcs, types int
+	var funcs, types int
 	seen := map[string]bool{}
 
 	for _, p := range m.Packages {
@@ -126,10 +126,13 @@ func Apply(m *model.Module, c *Changes) bool {
 			}
 		}
 	}
-	files = len(seen)
-
-	m.Diff = &model.DiffSummary{Ref: c.Ref, Files: files, Functions: funcs, Types: types}
-	return funcs+types > 0
+	if funcs+types == 0 {
+		// The diff touched no declaration: no summary, so the page does not show
+		// "0 files / 0 functions" as if the run had broken.
+		return false
+	}
+	m.Diff = &model.DiffSummary{Ref: c.Ref, Files: len(seen), Functions: funcs, Types: types}
+	return true
 }
 
 // hits reports whether a declaration's span intersects any changed range in its

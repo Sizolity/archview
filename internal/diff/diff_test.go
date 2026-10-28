@@ -102,6 +102,18 @@ func TestApplyWithoutChanges(t *testing.T) {
 	if m.Diff != nil {
 		t.Fatalf("summary = %+v, want nil", m.Diff)
 	}
+
+	// A diff that only touches files with no declarations (a README) must not
+	// leave an empty summary behind: the page would show "0 files".
+	m = &model.Module{Packages: []*model.Package{{Path: "a", Funcs: []*model.FuncInfo{
+		{ID: "a#A", Name: "A", Pos: "a/a.go:3", End: 5},
+	}}}}
+	if Apply(m, &Changes{Ref: "HEAD", Files: map[string][]Range{"README.md": {{1, 4}}}}) {
+		t.Fatal("a non-Go diff must not report changes")
+	}
+	if m.Diff != nil {
+		t.Fatalf("summary = %+v, want nil", m.Diff)
+	}
 }
 
 // Run shells out to git; it is skipped where git or a repository is missing.
