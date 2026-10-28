@@ -1128,3 +1128,386 @@ test("package cards show the doc comment when the package has one", () => {
   assert.equal(a.sub, "Package a does things.");
   assert.equal(b.sub, "b");
 });
+
+// ---------- invariant tests: axis contract, cards, panels ----------
+//
+// These are the regression net for the diagonal-edge bug: call edges used to
+// connect two cards that sat in the same horizontal row while the scene
+// declared a vertical flow, so the router left the source's bottom and entered
+// the target's top from inside the card. Every check below is phrased against
+// geometry (or the panel HTML), never against the router's internals.
+
+function invariantModel() {
+  return {
+    path: "example.com/app",
+    root: "E:/app",
+    editor: "vscode",
+    layers: [["cmd"], ["internal"]],
+    metrics: { average: 4.2, exceeded: 1, total_funcs: 5, thresholds: [5, 30] },
+    calls: [
+      // Two package-level functions share one band: the bug case.
+      { from: "example.com/app#Load", to: "example.com/app#LoadWith" },
+      // A method call between two type cards.
+      { from: "example.com/app#App.Foo", to: "example.com/app#Server.Bar" },
+      // A call from the program entry.
+      { from: "example.com/app#Root", to: "example.com/app#Load" }
+    ],
+    edges: [
+      { kind: "implements", from: "example.com/app#Impl", to: "example.com/app#Iface" }
+    ],
+    packages: [
+      {
+        path: "example.com/app",
+        name: "app",
+        doc: "Package app is the fixture root.",
+        imports: ["example.com/app/internal/store"],
+        main: true,
+        types: [
+          {
+            id: "example.com/app#App", name: "App", kind: "struct", exported: true,
+            doc: "App wires the server.", pos: "app.go:5",
+            fields: [{ name: "srv", type: "Server", exported: true, refs: ["example.com/app#Server"] }],
+            methods: [{ id: "example.com/app#App.Foo", name: "Foo", sig: "()", exported: true, pos: "app.go:8" }]
+          },
+          {
+            id: "example.com/app#Server", name: "Server", kind: "struct", exported: true,
+            doc: "Server serves requests.", pos: "server.go:10",
+            fields: [],
+            methods: [{ id: "example.com/app#Server.Bar", name: "Bar", sig: "()", exported: true, pos: "server.go:12" }]
+          },
+          {
+            id: "example.com/app#Iface", name: "Iface", kind: "interface", exported: true,
+            doc: "Iface is the contract.", pos: "iface.go:3",
+            fields: [], methods: [{ name: "Get", sig: "()", exported: true }]
+          },
+          {
+            id: "example.com/app#Impl", name: "Impl", kind: "struct", exported: true,
+            doc: "Impl implements Iface.", pos: "impl.go:7",
+            fields: [], methods: []
+          },
+          {
+            // A card with no doc: `sub` must fall back to the declaration kind.
+            id: "example.com/app#Plain", name: "Plain", kind: "type", exported: true,
+            pos: "plain.go:1", fields: [], methods: []
+          }
+        ],
+        funcs: [
+          { id: "example.com/app#Load", name: "Load", sig: "(string) error", doc: "Load reads the model.", pos: "load.go:20", exported: true },
+          { id: "example.com/app#LoadWith", name: "LoadWith", sig: "(string, Options) error", doc: "LoadWith reads it with options.", pos: "load.go:31", exported: true },
+          { id: "example.com/app#Root", name: "Root", sig: "()", doc: "Root is the entry point.", pos: "main.go:10", exported: true }
+        ],
+        consts: [{ name: "MaxRetries", type: "int", value: "3", doc: "MaxRetries bounds retries.", pos: "app.go:40", exported: true }],
+        vars: [{ name: "DefaultStore", type: "Store", doc: "DefaultStore is the default store.", pos: "app.go:44", exported: true }]
+      },
+      {
+        path: "example.com/app/internal/store",
+        name: "store",
+        doc: "Package store keeps things.",
+        imports: [],
+        types: [
+          {
+            id: "example.com/app/internal/store#DB", name: "DB", kind: "interface", exported: true,
+            doc: "DB is the storage contract.", pos: "db.go:3",
+            fields: [], methods: [{ name: "Get", sig: "(string) error", exported: true }]
+          }
+        ],
+        funcs: [],
+        consts: [],
+        vars: []
+      }
+    ]
+  };
+}
+
+function invariantScenes() {
+  const model = invariantModel();
+  const idx = ui.indexModel(model);
+  return {
+    model,
+    idx,
+    scenes: [
+      {
+        name: "home",
+        route: { view: "home" },
+        scene: ui.buildScene(model, idx, { view: "home" }, true, { calls: true })
+      },
+      {
+        name: "package/layer",
+        route: { view: "pkg", path: "example.com/app" },
+        scene: ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, true, { calls: true })
+      },
+      {
+        name: "package/kind",
+        route: { view: "pkg", path: "example.com/app" },
+        scene: ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, true, {
+          calls: true,
+          layout: "kind"
+        })
+      }
+    ]
+  };
+}
+
+const EDGE_PATH_RE = new RegExp(
+  "^M(-?\\d+(?:\\.\\d+)?),(-?\\d+(?:\\.\\d+)?) " +
+  "C(-?\\d+(?:\\.\\d+)?),(-?\\d+(?:\\.\\d+)?) " +
+  "(-?\\d+(?:\\.\\d+)?),(-?\\d+(?:\\.\\d+)?) " +
+  "(-?\\d+(?:\\.\\d+)?),(-?\\d+(?:\\.\\d+)?)$"
+);
+
+function parseEdgePath(d) {
+  const m = EDGE_PATH_RE.exec(d);
+  assert.ok(m, "unexpected edge path syntax: " + d);
+  return {
+    start: [Number(m[1]), Number(m[2])],
+    c1: [Number(m[3]), Number(m[4])],
+    c2: [Number(m[5]), Number(m[6])],
+    end: [Number(m[7]), Number(m[8])]
+  };
+}
+
+function borderSides(p, n) {
+  const sides = [];
+  if (Math.abs(p[1] - n.y) <= 1) sides.push("top");
+  if (Math.abs(p[1] - (n.y + n.h)) <= 1) sides.push("bottom");
+  if (Math.abs(p[0] - n.x) <= 1) sides.push("left");
+  if (Math.abs(p[0] - (n.x + n.w)) <= 1) sides.push("right");
+  return sides;
+}
+
+function assertBorderCentre(p, n, where) {
+  const sides = borderSides(p, n);
+  assert.equal(sides.length, 1,
+    `${where}: endpoint ${p} must sit on exactly one border of ${n.id} ${n.x},${n.y} ${n.w}x${n.h}, got ${sides}`);
+  const side = sides[0];
+  if (side === "top" || side === "bottom") {
+    assert.ok(Math.abs(p[0] - (n.x + n.w / 2)) <= 1,
+      `${where}: ${side} endpoint ${p} is not on the centreline x=${n.x + n.w / 2}`);
+  } else {
+    assert.ok(Math.abs(p[1] - (n.y + n.h / 2)) <= 1,
+      `${where}: ${side} endpoint ${p} is not on the centreline y=${n.y + n.h / 2}`);
+  }
+  return side;
+}
+
+function rangesOverlap(a0, a1, b0, b1) {
+  return a0 < b1 - 1 && b0 < a1 - 1;
+}
+
+function assertOutside(point, n, side, where) {
+  if (side === "top") {
+    assert.ok(point[1] <= n.y + 0.5, `${where}: control ${point} is inside the top of ${n.id}`);
+  } else if (side === "bottom") {
+    assert.ok(point[1] >= n.y + n.h - 0.5, `${where}: control ${point} is inside the bottom of ${n.id}`);
+  } else if (side === "left") {
+    assert.ok(point[0] <= n.x + 0.5, `${where}: control ${point} is inside the left of ${n.id}`);
+  } else {
+    assert.ok(point[0] >= n.x + n.w - 0.5, `${where}: control ${point} is inside the right of ${n.id}`);
+  }
+}
+
+function eachSceneEdge(where, scene, axis, visit) {
+  const byId = new Map(scene.nodes.map((n) => [n.id, n]));
+  scene.edges.forEach((e) => {
+    const a = byId.get(e.from);
+    const b = byId.get(e.to);
+    if (!a || !b) return;
+    visit({ a, b, e, d: ui.edgePath(a, b, axis) });
+  });
+}
+
+test("layout obeys the scene axis: every node in a layer shares its flow coordinate", () => {
+  const { scenes } = invariantScenes();
+  for (const { name, scene } of scenes) {
+    assert.ok(scene.nodes.length > 0, name + ": no nodes");
+    const layers = new Map();
+    scene.nodes.forEach((n) => {
+      assert.ok(Number.isInteger(n.layer),
+        `${name}: ${n.id} has no integer flow layer (${JSON.stringify(n.layer)})`);
+      if (!layers.has(n.layer)) layers.set(n.layer, []);
+      layers.get(n.layer).push(n);
+    });
+    layers.forEach((nodes, layer) => {
+      const coord = scene.axis === "v" ? "y" : "x";
+      const first = nodes[0][coord];
+      nodes.forEach((n) => {
+        assert.ok(Math.abs(n[coord] - first) <= 1,
+          `${name}: layer ${layer} mixes ${coord}=${n[coord]} (${n.id}) with ${coord}=${first}`);
+      });
+    });
+  }
+});
+
+test("every edge endpoint sits on the centre of a border of the box it connects", () => {
+  const { scenes } = invariantScenes();
+  for (const { name, scene } of scenes) {
+    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
+      const p = parseEdgePath(d);
+      assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
+      assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
+    });
+  }
+});
+
+test("vertical flow edges run downward between layers, or sideways within one", () => {
+  const { scenes } = invariantScenes();
+  for (const { name, scene } of scenes) {
+    if (scene.axis !== "v") continue;
+    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
+      const p = parseEdgePath(d);
+      const sa = assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
+      const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
+      const sameLayer = rangesOverlap(a.y, a.y + a.h, b.y, b.y + b.h);
+      if (sameLayer) {
+        assert.ok(["left", "right"].includes(sa) && ["left", "right"].includes(sb),
+          `${name}: same-layer edge ${e.from}->${e.to} must leave and enter on the side, got ${sa}->${sb} (${d})`);
+        assert.ok(Math.abs(p.start[1] - p.end[1]) <= 1,
+          `${name}: same-layer edge ${e.from}->${e.to} is diagonal (${d})`);
+        assert.ok((sa === "right") === (b.x + b.w / 2 > a.x + a.w / 2),
+          `${name}: ${e.from}->${e.to} leaves the wrong side (${sa}, ${d})`);
+      } else {
+        assert.ok(["top", "bottom"].includes(sa) && ["top", "bottom"].includes(sb),
+          `${name}: cross-layer edge ${e.from}->${e.to} must use the flow ports, got ${sa}->${sb} (${d})`);
+        assert.ok(!(sa === "bottom" && sb === "top") || p.end[1] >= p.start[1],
+          `${name}: edge ${e.from}->${e.to} enters a top port from below (${d})`);
+        assert.ok(!(sa === "top" && sb === "bottom") || p.end[1] <= p.start[1],
+          `${name}: edge ${e.from}->${e.to} enters a bottom port from above (${d})`);
+      }
+    });
+  }
+});
+
+test("regression: a call edge between two function cards in one row is side-routed", () => {
+  const model = {
+    path: "example.com/app",
+    calls: [{ from: "example.com/app#Load", to: "example.com/app#LoadWith" }],
+    packages: [{
+      path: "example.com/app",
+      name: "app",
+      imports: [],
+      types: [],
+      funcs: [
+        { id: "example.com/app#Load", name: "Load", sig: "()", pos: "a.go:1", exported: true },
+        { id: "example.com/app#LoadWith", name: "LoadWith", sig: "()", pos: "a.go:2", exported: true }
+      ]
+    }]
+  };
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false, { calls: true });
+  const byId = new Map(scene.nodes.map((n) => [n.id, n]));
+  const a = byId.get("example.com/app#Load");
+  const b = byId.get("example.com/app#LoadWith");
+  assert.equal(scene.axis, "v");
+  assert.equal(a.y, b.y, "the two function cards share a row");
+
+  const p = parseEdgePath(ui.edgePath(a, b, scene.axis));
+  const sa = assertBorderCentre(p.start, a, "function row start");
+  const sb = assertBorderCentre(p.end, b, "function row end");
+  assert.ok(["left", "right"].includes(sa) && ["left", "right"].includes(sb),
+    `a same-row edge must use side ports, got ${sa}->${sb}: ${ui.edgePath(a, b, scene.axis)}`);
+  assert.equal(p.start[1], a.y + a.h / 2, "it leaves on the row centreline");
+  assert.equal(p.end[1], b.y + b.h / 2, "it enters on the row centreline");
+});
+
+test("horizontal flow edges run sideways between layers, or downward within one", () => {
+  const { scenes } = invariantScenes();
+  for (const { name, scene } of scenes) {
+    if (scene.axis !== "h") continue;
+    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
+      const p = parseEdgePath(d);
+      const sa = assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
+      const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
+      const sameLayer = rangesOverlap(a.x, a.x + a.w, b.x, b.x + b.w);
+      if (sameLayer) {
+        assert.ok(["top", "bottom"].includes(sa) && ["top", "bottom"].includes(sb),
+          `${name}: same-layer edge ${e.from}->${e.to} must leave and enter on the flow side, got ${sa}->${sb} (${d})`);
+        assert.ok(Math.abs(p.start[0] - p.end[0]) <= 1,
+          `${name}: same-layer edge ${e.from}->${e.to} is diagonal (${d})`);
+      } else {
+        assert.ok(["left", "right"].includes(sa) && ["left", "right"].includes(sb),
+          `${name}: cross-layer edge ${e.from}->${e.to} must use the flow ports, got ${sa}->${sb} (${d})`);
+        assert.ok(!(sa === "right" && sb === "left") || p.end[0] >= p.start[0],
+          `${name}: edge ${e.from}->${e.to} enters a left port from the right (${d})`);
+        assert.ok(!(sa === "left" && sb === "right") || p.end[0] <= p.start[0],
+          `${name}: edge ${e.from}->${e.to} enters a right port from the left (${d})`);
+      }
+    });
+  }
+});
+
+test("an edge approaches both boxes from outside, so its arrowhead is not buried in a card", () => {
+  const { scenes } = invariantScenes();
+  for (const { name, scene } of scenes) {
+    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
+      const p = parseEdgePath(d);
+      const sa = assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
+      const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
+      assertOutside(p.c1, a, sa, `${name} ${e.from}->${e.to} source`);
+      assertOutside(p.c2, b, sb, `${name} ${e.from}->${e.to} target`);
+    });
+  }
+});
+
+test("every card has title, sub, href and the drill target its kind supports", () => {
+  const { scenes } = invariantScenes();
+  const seen = new Set();
+  for (const { name, scene } of scenes) {
+    scene.nodes.forEach((n) => {
+      if (seen.has(n.id)) return;
+      seen.add(n.id);
+      assert.ok(n.title, `${name}: ${n.id} has no title`);
+      assert.ok(n.sub, `${name}: ${n.id} has no sub line`);
+      assert.ok(typeof n.href === "string" && n.href.charAt(0) === "#",
+        `${name}: ${n.id} has no in-page href (${JSON.stringify(n.href)})`);
+      if (n.kind === "pkg") {
+        assert.equal(n.drillHref, ui.pkgHash(n.id), `${name}: ${n.id} must drill into the package`);
+      } else if (n.pos) {
+        assert.ok(n.drillHref.indexOf("vscode://file/") === 0,
+          `${name}: ${n.id} has a source position but no drill target (${JSON.stringify(n.drillHref)})`);
+      }
+    });
+  }
+  assert.ok(seen.size >= 10, "fixture should exercise every card kind, got " + seen.size);
+});
+
+test("panelFrame is one frame for title, badges, meta, lead, doc and body", () => {
+  assert.equal(typeof ui.panelFrame, "function", "panelFrame must be testable from ui.js");
+  const html = ui.panelFrame({
+    title: "Server",
+    badges: [{ cls: "type", text: "struct" }],
+    meta: ["example.com/app · server.go:10"],
+    lead: '<p><code class="sig">Server{}</code></p>',
+    doc: "Server serves requests.",
+    body: "<h3>方法</h3>"
+  });
+  assert.match(html, /^<h2>Server <span class="badge type">struct<\/span><\/h2>/);
+  assert.ok(html.includes('<div class="meta">example.com/app · server.go:10</div>'));
+  assert.ok(html.includes('<p><code class="sig">Server{}</code></p>'));
+  assert.ok(html.includes('<p class="doc">Server serves requests.</p>'));
+  assert.ok(html.endsWith("<h3>方法</h3>"));
+  assert.equal(ui.panelFrame({ title: "x" }), "<h2>x</h2>");
+});
+
+test("every declaration panel renders the doc paragraph", () => {
+  const { model, idx, scenes } = invariantScenes();
+  const pkgScene = scenes.find((s) => s.name === "package/layer").scene;
+  const homeScene = scenes.find((s) => s.name === "home").scene;
+  const ctx = { model, idx, all: true, from: "#/", selected: "example.com/app" };
+
+  const cases = [
+    { name: "home/package", route: { view: "home" }, scene: homeScene, doc: "Package app is the fixture root." },
+    { name: "package", route: { view: "pkg", path: "example.com/app" }, scene: pkgScene, doc: "Package app is the fixture root." },
+    { name: "type", route: { view: "type", id: "example.com/app#Server" }, scene: pkgScene, doc: "Server serves requests." },
+    { name: "func", route: { view: "func", id: "example.com/app#Load" }, scene: pkgScene, doc: "Load reads the model." },
+    { name: "value", route: { view: "value", id: "example.com/app#MaxRetries" }, scene: pkgScene, doc: "MaxRetries bounds retries." }
+  ];
+  for (const c of cases) {
+    const html = ui.panelFor(c.route, c.scene, ctx);
+    assert.ok(typeof html === "string" && html.length > 0, c.name + ": no panel");
+    assert.ok(html.includes('<p class="doc">' + ui.esc(c.doc) + "</p>"),
+      c.name + ": panel omits its doc paragraph\n" + html.slice(0, 200));
+  }
+  // A declaration without a doc must not grow an empty doc paragraph.
+  const plain = ui.panelFor({ view: "type", id: "example.com/app#Plain" }, pkgScene, ctx);
+  assert.ok(!plain.includes('class="doc"'), "a doc-less type must not render an empty doc paragraph");
+});

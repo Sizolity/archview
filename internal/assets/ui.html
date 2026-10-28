@@ -209,8 +209,16 @@
 (function () {
   "use strict";
 
-  // Everything that does not touch the DOM lives in ui.js, where node --test
-  // can reach it; this file keeps the page wiring only.
+  // The page has one owner per concern:
+  //
+  //   state/model   — the fetched model, its index and the view flags
+  //   drawing       — markers, cards (drawNode/CARD_STYLE), edge paths,
+  //                   transform and fit
+  //   inspector     — a thin DOM sink for A.panelFor / search
+  //   binding       — every DOM event, delegated through #svg
+  //
+  // Everything that can be decided without a document lives in ui.js; this
+  // file only maps that result onto SVG and HTML.
   var A = window.ArchView;
   var NS = "http://www.w3.org/2000/svg";
   var svg = document.getElementById("svg");
@@ -223,60 +231,21 @@
   var esc = A.esc, cut = A.cut, short = A.short;
   var pkgHash = A.pkgHash, typeHash = A.typeHash;
 
-  // The jump target depends on -editor (4.2): vscode://, goland://, file://,
-  // the built-in /source page, or nothing at all.
-  function sourceHref(pos) {
-    return A.editorHref(state.model && state.model.editor, state.model && state.model.root, pos);
-  }
-
   var CRAP_FILL = { ok: "#dcfce7", warn: "#fef3c7", bad: "#fee2e2" };
   var CRAP_INK = { ok: "#166534", warn: "#92400e", bad: "#991b1b" };
-
-  // crapCell renders one CRAP cell, or a dash when go-crap reported nothing.
-  function crapCell(m) {
-    if (!m || !m.metrics) return '<td class="meta">—</td>';
-    var mt = m.metrics;
-    return '<td><span class="crap ' + A.crapLevel(mt.crap, A.crapThresholds(state.model)) + '" title="CC ' + mt.cyclomatic +
-      " · 覆盖 " + mt.coverage.toFixed(1) + '%">' + A.formatCrap(mt.crap) + "</span></td>";
-  }
-
-  function crapChip(v) {
-    if (v == null) return "";
-    return '<span class="crap ' + A.crapLevel(v, A.crapThresholds(state.model)) + '">CRAP ' + A.formatCrap(v) + "</span>";
-  }
-
-  // callLabel turns a function ID into a link to its owner type, or plain code
-  // when the target is a package-level function (or an interface method with no
-  // node of its own).
-  function callLabel(id) {
-    var f = idx.funcById.get(id);
-    if (f) {
-      return f.owner ? typeLink(f.owner, f.name) : '<code class="sig">' + esc(f.name) + "</code>";
-    }
-    var owner = A.ownerTypeID(id);
-    var name = A.funcName(id);
-    if (owner && idx.typeById.has(owner)) return typeLink(owner, name);
-    return '<code class="sig">' + esc(name) + "</code>";
-  }
 
   var state = {
     model: null, all: false, q: "", route: { view: "home" }, sel: "",
     collapsed: [], expanded: [], layout: "layer", calls: false,
-    moved: {}, suppressClick: false,
     hits: [], hitIndex: 0,
-    tx: 0, ty: 0, k: 1, sceneKey: "", scene: null
+    tx: 0, ty: 0, k: 1, sceneKey: "", scene: null,
+    cards: new Map()
   };
 
   var idx = { pkgByPath: new Map(), typeById: new Map(), incoming: new Map(), funcByID: new Map(), valueByID: new Map() };
 
   function rel(p) { return A.relPath(state.model && state.model.path, p); }
   function vis(list) { return A.visible(list, state.all); }
-  function el(name, attrs, text) {
-    var n = document.createElementNS(NS, name);
-    if (attrs) for (var k in attrs) n.setAttribute(k, attrs[k]);
-    if (text != null) n.textContent = text;
-    return n;
-  }
 
   // ---------- model fetch ----------
 
@@ -339,10 +308,25 @@
     else location.hash = hash;
   }
 
-  // Scene building, layout and routing live in ui.js (buildScene,
-  // layoutPackages, layoutTypes); the page only wires the result to the DOM.
+  // cardIndex is the one map from a declaration ID to its canvas card. The
+  // renderer, the delegated click handler and the double-click handler all
+  // read the same map, so a card cannot behave differently from its panel.
+  function cardIndex(scene) {
+    var cards = new Map();
+    (scene ? scene.nodes : []).forEach(function (n) { cards.set(n.id, n); });
+    return cards;
+  }
 
   // ---------- drawing ----------
+
+  // One helper creates every SVG element. Nothing else calls
+  // document.createElementNS, so namespaces and attribute wiring live here.
+  function svgEl(name, attrs, text) {
+    var n = document.createElementNS(NS, name);
+    if (attrs) for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
 
   // One marker per line style: the arrow carries the relation colour.
   var MARKERS = [
@@ -367,6 +351,7 @@
 
   // edgeClass names the relation so the CSS owns the look.
   var edgeEls = [];
+
   function edgeClass(e) {
     var cls = "edge";
     if (e.ref) cls += " ref";
@@ -389,40 +374,16 @@
     });
   }
 
-  function draw(scene) {
-    svg.innerHTML = "";
-    var defs = el("defs");
-    MARKERS.forEach(function (m) {
-      var marker = el("marker", {
-        id: m.id, viewBox: "0 0 10 10", refX: "9", refY: "5",
-        markerWidth: "9", markerHeight: "9", markerUnits: "userSpaceOnUse",
-        overflow: "visible", orient: "auto-start-reverse"
-      });
-      marker.appendChild(el("path", { d: "M0,0 L10,5 L0,10 z", fill: m.fill }));
-      defs.appendChild(marker);
-    });
-    svg.appendChild(defs);
-
-    var world = el("g", { id: "world" });
-    svg.appendChild(world);
-
-    var byId = new Map();
-    scene.nodes.forEach(function (n) { byId.set(n.id, n); });
-
+  // drawEdges routes every scene edge from its two cards and the scene axis.
+  // The offset/axis decisions all live in A.edgePath, not here.
+  function drawEdges(scene, cards, world) {
     edgeEls = [];
     scene.edges.forEach(function (e) {
-      var a = byId.get(e.from), b = byId.get(e.to);
+      var a = cards.get(e.from), b = cards.get(e.to);
       if (!a || !b) return;
       var cls = edgeClass(e);
-      // A call edge stops 10px short of the target card, so its arrowhead is not
-      // painted under the card's own rect.
-      var target = b;
-      if (e.call || e.callOnly) {
-        target = { x: b.x, y: b.y, w: b.w, h: b.h };
-        if (scene.axis === "v") target.y = b.y - 10; else target.x = b.x - 10;
-      }
-      var p = el("path", {
-        d: A.edgePath(a, target, scene.axis),
+      var p = svgEl("path", {
+        d: A.edgePath(a, b, scene.axis),
         class: cls,
         "marker-end": "url(#" + markerFor(e) + ")"
       });
@@ -431,19 +392,15 @@
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on. A callOnly edge names the absent import.
         var lead = e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : "");
-        p.appendChild(el("title", {}, lead + e.from + " → " + e.to));
+        p.appendChild(svgEl("title", {}, lead + e.from + " → " + e.to));
       }
       world.appendChild(p);
     });
     highlightEdges(scene.selected);
-
-    scene.nodes.forEach(function (n) { world.appendChild(drawNode(n)); });
-
-    applyTransform();
   }
 
-  // Per-kind card colours. buildCard keeps the node's kind "interface" for an
-  // interface type, so the table alone picks the style; no capability branches.
+  // Per-kind card colours. buildCard keeps an interface's kind "interface", so
+  // the table alone picks the style; no capability branches.
   var CARD_STYLE = {
     type: { fill: "#dbeafe", stroke: "#3b82f6" },
     interface: { fill: "#fef3c7", stroke: "#d97706" },
@@ -453,51 +410,49 @@
   };
 
   // drawNode is the one card renderer: buildCard (ui.js) has already defaulted
-  // every field, so this only maps a node onto its SVG pieces. The kind checks
-  // that remain are the three things that genuinely differ: style, row baseline
-  // and the fold handle.
+  // every field, so this only maps a node onto SVG pieces. The kind checks that
+  // remain are the three things that genuinely differ: style, row baseline and
+  // the fold handle. It attaches no listeners; the delegated handler in the
+  // binding section owns every click.
   function drawNode(n) {
     var isDecl = n.kind === "type" || n.kind === "interface";
-    var g = el("g", { class: "node" + (n.selected ? " selected" : "") + (n.dim ? " dim" : ""),
-      "data-id": n.id });
+    var g = svgEl("g", {
+      class: "node" + (n.selected ? " selected" : "") + (n.dim ? " dim" : ""),
+      "data-id": n.id
+    });
     // Hover text: the card truncates, the tooltip does not.
-    g.appendChild(el("title", {}, n.title + (n.sub ? " — " + n.sub : "") +
+    g.appendChild(svgEl("title", {}, n.title + (n.sub ? " — " + n.sub : "") +
       (n.more > 0 ? " (还有 " + n.more + " 条,点击展开)" : "")));
     var style = CARD_STYLE[n.kind] || CARD_STYLE.type;
     // -diff marks a declaration: the accent stroke stands out without hiding
     // everything else.
-    g.appendChild(el("rect", { x: n.x, y: n.y, width: n.w, height: n.h, rx: 9,
+    g.appendChild(svgEl("rect", { x: n.x, y: n.y, width: n.w, height: n.h, rx: 9,
       fill: style.fill, stroke: n.changed ? "#ea580c" : style.stroke, class: "box" }));
-    g.appendChild(el("text", { x: n.x + 12, y: n.y + 20, class: "title" }, cut(n.title, 26)));
+    g.appendChild(svgEl("text", { x: n.x + 12, y: n.y + 20, class: "title" }, cut(n.title, 26)));
     if (n.changed) {
-      g.appendChild(el("circle", { cx: n.x + 6, cy: n.y + 6, r: 4, fill: "#ea580c", class: "changed-dot" }));
+      g.appendChild(svgEl("circle", { cx: n.x + 6, cy: n.y + 6, r: 4, fill: "#ea580c", class: "changed-dot" }));
     }
-    g.appendChild(el("text", { x: n.x + 12, y: n.y + (isDecl ? 34 : 36), class: "kind" },
+    g.appendChild(svgEl("text", { x: n.x + 12, y: n.y + (isDecl ? 34 : 36), class: "kind" },
       cut(n.sub, 40)));
     if (n.rows && n.rows.length) {
       var base = isDecl ? 34 : 54;
       var step = isDecl ? 17 : 16;
       n.rows.forEach(function (row, i) {
-        g.appendChild(el("text", { x: n.x + 12, y: n.y + base + (isDecl ? 16 : 0) + i * step, class: "row" },
+        g.appendChild(svgEl("text", { x: n.x + 12, y: n.y + base + (isDecl ? 16 : 0) + i * step, class: "row" },
           cut(row, isDecl ? 42 : 40)));
       });
       if (n.more > 0) {
-        var moreText = el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * step, class: "kind",
-          style: "pointer-events: all; cursor: pointer; text-decoration: underline", fill: "#2563eb" },
+        var moreText = svgEl("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * step, class: "kind",
+          style: "pointer-events: all; cursor: pointer; text-decoration: underline", fill: "#2563eb",
+          "data-action": "more" },
           "… 还有 " + n.more + " 条(点击查看详情)");
-        moreText.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          // Open the inspector instead of growing the card: the layout stays
-          // put, so the viewport and the zoom do not move.
-          go(A.typeHash(n.id));
-        });
         g.appendChild(moreText);
       }
     }
     if (n.entry) {
-      g.appendChild(el("rect", { x: n.x + n.w - 46, y: n.y + 7, width: 38, height: 17, rx: 8,
+      g.appendChild(svgEl("rect", { x: n.x + n.w - 46, y: n.y + 7, width: 38, height: 17, rx: 8,
         fill: "#ecfeff", class: "entry-badge" }));
-      g.appendChild(el("text", { x: n.x + n.w - 27, y: n.y + 19.5, class: "entry-text",
+      g.appendChild(svgEl("text", { x: n.x + n.w - 27, y: n.y + 19.5, class: "entry-text",
         fill: "#0e7490", "text-anchor": "middle" }, "入口"));
     }
     if (n.crap != null) {
@@ -505,53 +460,42 @@
       // risky as its worst declaration. Leave room for the entry badge.
       var lvl = A.crapLevel(n.crap, A.crapThresholds(state.model));
       var bx = n.x + n.w - (n.entry ? 110 : 54);
-      g.appendChild(el("rect", { x: bx, y: n.y + 7, width: 46, height: 17, rx: 8,
+      g.appendChild(svgEl("rect", { x: bx, y: n.y + 7, width: 46, height: 17, rx: 8,
         fill: CRAP_FILL[lvl], class: "crap-badge" }));
-      g.appendChild(el("text", { x: bx + 23, y: n.y + 19.5, class: "crap-text",
+      g.appendChild(svgEl("text", { x: bx + 23, y: n.y + 19.5, class: "crap-text",
         fill: CRAP_INK[lvl], "text-anchor": "middle" }, A.formatCrap(n.crap)));
     }
     if (isDecl) {
       // Fold toggle (3.2): collapsed cards keep their title only.
-      var fold = el("text", { x: n.x + n.w - 16, y: n.y + n.h - 8, class: "fold" }, n.folded ? "▸" : "▾");
-      fold.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        state.collapsed = A.toggleCollapsed(state.collapsed, n.id);
-        state.sceneKey = "";
-        render();
-      });
-      g.appendChild(fold);
+      g.appendChild(svgEl("text", { x: n.x + n.w - 16, y: n.y + n.h - 8, class: "fold",
+        "data-action": "fold" }, n.folded ? "▸" : "▾"));
     }
-    g.addEventListener("mousedown", function (ev) {
-      ev.stopPropagation();
-      // Dragging cards is off: it fought with clicking and the positions were
-      // never reapplied after a re-render anyway. The canvas still pans.
-      state.suppressClick = false;
-    });
-    g.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      if (state.suppressClick) return;
-      // A card that is already the current view must not re-render: the
-      // double-click below needs the element to stay alive.
-      if (n.selected) return;
-      // A package's select route is the module view itself; remember which box
-      // was clicked so the module view can show it selected.
-      if (n.href === "#/") state.sel = n.id;
-      go(n.href);
-    });
-    // Double-click drills down. drillHref already encodes the destination: the
-    // package route for a module card, the source link for a declaration.
-    g.addEventListener("dblclick", function (ev) {
-      ev.stopPropagation();
-      var href = n.drillHref;
-      if (!href) return;
-      if (href.charAt(0) === "#") { go(href); return; }
-      if (href.indexOf("/source?") === 0) {
-        if (!state.model.root) return; // an imported IR has no sources behind it
-        href = A.withFrom(href, location.hash || "#/");
-      }
-      window.location.href = href;
-    });
     return g;
+  }
+
+  function draw(scene) {
+    svg.innerHTML = "";
+    var defs = svgEl("defs");
+    MARKERS.forEach(function (m) {
+      var marker = svgEl("marker", {
+        id: m.id, viewBox: "0 0 10 10", refX: "9", refY: "5",
+        markerWidth: "9", markerHeight: "9", markerUnits: "userSpaceOnUse",
+        overflow: "visible", orient: "auto-start-reverse"
+      });
+      marker.appendChild(svgEl("path", { d: "M0,0 L10,5 L0,10 z", fill: m.fill }));
+      defs.appendChild(marker);
+    });
+    svg.appendChild(defs);
+
+    var world = svgEl("g", { id: "world" });
+    svg.appendChild(world);
+
+    var cards = cardIndex(scene);
+    state.cards = cards;
+    drawEdges(scene, cards, world);
+    scene.nodes.forEach(function (n) { world.appendChild(drawNode(n)); });
+
+    applyTransform();
   }
 
   function applyTransform() {
@@ -572,309 +516,33 @@
 
   // ---------- inspector ----------
 
-  function typeLink(id, label) {
-    var t = idx.typeById.get(id);
-    if (!t) return "<code>" + esc(label || id) + "</code>";
-    return '<a href="' + typeHash(id) + '">' + esc(label || (t.pkg.name + "." + t.name)) + "</a>";
-  }
-
-  // routePkg resolves the package a route belongs to, so the crumb and the
-  // side panel can treat type, function and value views the same way.
-  function routePkg(r) {
-    if (r.view === "pkg") return idx.pkgByPath.get(r.path);
-    if (r.view === "func") return (idx.funcByID.get(r.id) || {}).pkg;
-    if (r.view === "value") return (idx.valueByID.get(r.id) || {}).pkg;
-    return (idx.typeById.get(r.id) || {}).pkg;
-  }
-
   function renderCrumb() {
     var r = state.route;
     if (r.view === "home") { crumb.innerHTML = "<b>模块总览</b>"; return; }
-    var pkg = routePkg(r);
+    var pkg = A.routePkg(r, idx);
     if (!pkg) { crumb.innerHTML = '<a href="#/">模块总览</a>'; return; }
     var html = '<a href="#/">模块总览</a><span class="sep">/</span>';
     if (r.view === "pkg") {
       html += "<b>" + esc(rel(pkg.path)) + "</b>";
     } else {
-      html += '<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + '</a><span class="sep">/</span><b>' + esc(short(r.id.split("#").pop())) + "</b>";
+      html += '<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + '</a><span class="sep">/</span><b>' +
+        esc(short(r.id.split("#").pop())) + "</b>";
     }
     crumb.innerHTML = html;
   }
 
+  // renderSide is the only DOM sink for a declaration panel. The frame and the
+  // per-kind sections are pure functions in ui.js, so the same HTML is covered
+  // by node --test.
   function renderSide(scene) {
     if (state.q) { renderSearch(); return; }
-    var r = state.route;
-    if (r.view === "home" || !scene) { renderHome(); return; }
-    if (r.view === "pkg" && scene.pkg) { renderPkg(scene.pkg); return; }
-    if (r.view === "func") {
-      var fn = idx.funcByID.get(r.id);
-      if (!fn) { renderHome(); return; }
-      renderFunc(fn.decl, fn.pkg);
-      return;
-    }
-    if (r.view === "value") {
-      var val = idx.valueByID.get(r.id);
-      if (!val) { renderHome(); return; }
-      renderValue(val.decl, val.pkg);
-      return;
-    }
-    var t = idx.typeById.get(r.id);
-    if (!t) { renderHome(); return; }
-    renderType(t);
-  }
-
-  // panelFrame is the inspector's shared frame: the title line with its badges,
-  // one or more meta lines, an optional lead paragraph, the doc paragraph and
-  // the sections the view supplies. Titles are trusted markup, badge text is
-  // escaped, and meta/body are built by the views with esc().
-  function panelFrame(o) {
-    var html = "<h2>" + o.title;
-    (o.badges || []).forEach(function (b) {
-      html += ' <span class="badge' + (b.cls ? " " + b.cls : "") + '">' + esc(b.text) + "</span>";
+    side.innerHTML = A.panelFor(state.route, scene, {
+      model: state.model,
+      idx: idx,
+      all: state.all,
+      from: location.hash || "#/",
+      selected: state.sel
     });
-    html += "</h2>";
-    (o.meta || []).forEach(function (line) { html += '<div class="meta">' + line + "</div>"; });
-    if (o.lead) html += o.lead;
-    if (o.doc) html += '<p class="doc">' + esc(o.doc) + "</p>";
-    return html + (o.body || "");
-  }
-
-  // sourceButton is the "查看源码" link shared by the declaration panels.
-  function sourceButton(pos) {
-    var href = A.withFrom(sourceHref(pos), location.hash || "#/");
-    return href ? '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>' : "";
-  }
-
-  // homeDetail is the module inspector for the package selected on the canvas:
-  // counts, risk, change marker, both import directions and the way in.
-  function homeDetail(p) {
-    var all = A.showsAll(p, state.all);
-    var worst = A.packageCrap(p);
-    var meta = [esc(rel(p.path)),
-      A.visible(p.types, all).length + " 类型 · " + A.visible(p.funcs, all).length + " 函数 · " +
-      A.visible(A.valuesOf(p), all).length + " 变量" + (worst != null ? " " + crapChip(worst) : "")];
-    var body = "";
-    if (A.packageChanged(p)) body += '<p><span class="badge diff">已修改</span></p>';
-    body += '<a class="src" href="' + pkgHash(p.path) + '">进入 ' + esc(short(p.path)) + "</a>";
-
-    var imports = p.imports || [];
-    body += "<h3>依赖</h3>";
-    if (!imports.length) body += '<p class="empty">没有模块内依赖</p>';
-    else {
-      body += '<div class="chips">';
-      imports.forEach(function (i) {
-        body += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>";
-      });
-      body += "</div>";
-    }
-
-    var importers = state.model.packages.filter(function (q) {
-      return q.path !== p.path && (q.imports || []).indexOf(p.path) >= 0;
-    });
-    body += "<h3>被依赖</h3>";
-    if (!importers.length) body += '<p class="empty">没有其他模块依赖它</p>';
-    else {
-      body += '<div class="chips">';
-      importers.forEach(function (q) {
-        body += '<a class="chip" href="' + pkgHash(q.path) + '">' + esc(rel(q.path)) + "</a>";
-      });
-      body += "</div>";
-    }
-    return panelFrame({ title: esc(short(p.path)), meta: meta, doc: p.doc, body: body });
-  }
-
-  function renderHome() {
-    var sel = state.sel ? idx.pkgByPath.get(state.sel) : null;
-    var html = sel ? homeDetail(sel) : panelFrame({ title: "模块总览" });
-    // With a selection the detail leads; the full list stays below so another
-    // module can be picked without going back to the canvas.
-    if (sel) html += "<h3>模块总览</h3>";
-    html += '<div class="meta">' + state.model.packages.length + " 个包 · 单击方框选中 · 双击进入模块</div>";
-    if (state.model.metrics) {
-      var s = state.model.metrics;
-      html += '<div class="meta">CRAP 平均 ' + A.formatCrap(s.average) + " · 超标 " +
-        s.exceeded + "/" + s.total_funcs + " 个函数</div>";
-    }
-    html += '<ul class="pkg-list">';
-    state.model.packages.forEach(function (p) {
-      html += "<li><a href=\"" + pkgHash(p.path) + "\"><span>" + esc(rel(p.path)) + "</span>" +
-        '<span class="count">' + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数</span></a></li>";
-    });
-    html += "</ul>";
-    side.innerHTML = html;
-  }
-
-  function renderPkg(p) {
-    var body = "";
-    if (p.imports.length) {
-      body += "<h3>依赖</h3><div class=\"chips\">";
-      p.imports.forEach(function (i) { body += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>"; });
-      body += "</div>";
-      var bad = p.imports.filter(function (i) {
-        return A.layerViolation(state.model.layers, state.model.path, p.path, i);
-      });
-      if (bad.length) {
-        body += "<h3>违规依赖</h3><ul class=\"rel\">";
-        bad.forEach(function (i) {
-          body += "<li><span class=\"crap bad\">内层→外层</span> " + esc(rel(i)) + "</li>";
-        });
-        body += "</ul>";
-      }
-    }
-    body += "<h3>类型</h3>";
-    var all = A.showsAll(p, state.all);
-    var types = A.visible(p.types, all);
-    if (!types.length) body += '<p class="empty">没有导出类型</p>';
-    else {
-      body += "<table><thead><tr><th>类型</th><th>成员</th></tr></thead><tbody>";
-      types.forEach(function (t) {
-        body += '<tr><td class="name"><a href="' + typeHash(t.id) + '">' + esc(t.name) + "</a> <span class=\"badge " +
-          (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></td><td>" +
-          A.visible(t.fields, all).length + " 字段 · " + A.visible(t.methods, all).length + " 方法</td></tr>";
-      });
-      body += "</tbody></table>";
-    }
-    var funcs = A.visible(p.funcs, all);
-    var metricsOn = !!state.model.metrics;
-    body += "<h3>函数</h3>";
-    if (!funcs.length) body += '<p class="empty">没有导出函数</p>';
-    else {
-      body += "<table><thead><tr><th>函数</th><th>签名</th>" + (metricsOn ? "<th>CRAP</th>" : "") +
-        "</tr></thead><tbody>";
-      funcs.forEach(function (f) {
-        body += '<tr><td class="name">' + esc(f.name) + '</td><td><code class="sig">' + esc(f.sig) +
-          "</code></td>" + (metricsOn ? crapCell(f) : "") + "</tr>";
-      });
-      body += "</tbody></table>";
-    }
-    side.innerHTML = panelFrame({ title: esc(rel(p.path)), doc: p.doc, body: body,
-      meta: [esc(p.name) + " · " + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数"] });
-  }
-
-  function renderType(t) {
-    var badges = [{
-      cls: t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : ""),
-      text: t.kind
-    }];
-    if (t.changed || (t.methods || []).some(function (m) { return m.changed; })) {
-      badges.push({ cls: "diff", text: "改动" });
-    }
-
-    var body = "";
-    var fields = vis(t.fields), methods = vis(t.methods);
-    body += "<h3>字段</h3>";
-    if (!fields.length) body += '<p class="empty">没有字段</p>';
-    else {
-      body += "<table><thead><tr><th>字段</th><th>类型</th></tr></thead><tbody>";
-      fields.forEach(function (f) {
-        var typ = (f.refs && f.refs.length) ? f.refs.map(function (r) { return typeLink(r); }).join(" / ") : '<code class="sig">' + esc(f.type) + "</code>";
-        body += '<tr><td class="name">' + (f.embedded ? "«嵌入»" : esc(f.name)) + "</td><td>" + typ + "</td></tr>";
-      });
-      body += "</tbody></table>";
-    }
-
-    body += "<h3>方法</h3>";
-    if (!methods.length) body += '<p class="empty">没有方法</p>';
-    else {
-      body += "<table><thead><tr><th>方法</th><th>签名</th>" + (state.model.metrics ? "<th>CRAP</th>" : "") +
-        "</tr></thead><tbody>";
-      methods.forEach(function (m) {
-        body += '<tr><td class="name">' + esc(m.name) + '</td><td><code class="sig">' + esc(m.sig) +
-          "</code></td>" + (state.model.metrics ? crapCell(m) : "") + "</tr>";
-      });
-      body += "</tbody></table>";
-    }
-
-    var out = [];
-    fields.forEach(function (f) { (f.refs || []).forEach(function (r) { out.push({ id: r, label: "字段 " + f.name }); }); });
-    methods.forEach(function (m) { (m.refs || []).forEach(function (r) { out.push({ id: r, label: "方法 " + m.name }); }); });
-    var seen = {};
-    out = out.filter(function (o) { if (seen[o.id]) return false; seen[o.id] = true; return true; });
-    var inc = idx.incoming.get(t.id) || [];
-
-    body += "<h3>关系</h3><div class=\"rel\">";
-    body += "<div><b>引用</b>" + (out.length ? "<ul>" + out.map(function (o) {
-      return "<li>" + esc(o.label) + " → " + typeLink(o.id) + "</li>";
-    }).join("") + "</ul>" : '<p class="empty">没有引用模块内类型</p>') + "</div>";
-    body += "<div><b>被引用</b>" + (inc.length ? "<ul>" + inc.map(function (o) {
-      var from = idx.typeById.has(o.from) ? typeLink(o.from) : '<a href="' + pkgHash(o.from) + '">' + esc(rel(o.from)) + "</a>";
-      return "<li>" + from + " · " + esc(o.label) + "</li>";
-    }).join("") + "</ul>" : '<p class="empty">没有其他类型或函数引用它</p>') + "</div>";
-    body += "</div>";
-
-    // 2.2: one hop of the call graph, straight from the model.
-    var calls = state.model.calls || [];
-    if (calls.length) {
-      var callsOut = calls.filter(function (c) { return A.ownerTypeID(c.from) === t.id; });
-      var calledBy = calls.filter(function (c) { return A.ownerTypeID(c.to) === t.id; });
-      var callItem = function (c) {
-        return "<li>" + esc(A.funcName(c.from)) + " → " + callLabel(c.to) +
-          (c.dynamic ? ' <span class="badge iface">动态</span>' : "") + "</li>";
-      };
-      var moreNote = function (list) {
-        return list.length > 12 ? '<p class="empty">还有 ' + (list.length - 12) + " 条</p>" : "";
-      };
-      body += "<h3>调用</h3><div class=\"rel\">";
-      body += "<div><b>调用了</b>" + (callsOut.length
-        ? "<ul>" + callsOut.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(callsOut)
-        : '<p class="empty">没有调用模块内函数</p>') + "</div>";
-      body += "<div><b>被调用</b>" + (calledBy.length
-        ? "<ul>" + calledBy.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(calledBy)
-        : '<p class="empty">没有被模块内函数调用</p>') + "</div>";
-      body += "</div>";
-    }
-    body += sourceButton(t.pos);
-
-    side.innerHTML = panelFrame({ title: esc(t.name), badges: badges, doc: t.doc, body: body,
-      meta: [esc(rel(t.pkg.path)) + " · " + esc(t.pos) +
-        (state.model.metrics ? " " + crapChip(A.typeCrap(t)) : "")] });
-  }
-
-  // renderFunc is the inspector for a package-level function: the type panel's
-  // shape plus the one-hop call list the model already carries.
-  function renderFunc(f, pkg) {
-    // Calls are stored at function granularity (2.2), so the exact declaration
-    // ID is enough: there is no owner type to aggregate here.
-    var id = f.id || (pkg.path + "#" + f.name);
-    var calls = state.model.calls || [];
-    var callsOut = calls.filter(function (c) { return c.from === id; });
-    var calledBy = calls.filter(function (c) { return c.to === id; });
-    var callItem = function (c) {
-      return "<li><code class=\"sig\">" + esc(A.funcName(c.from)) + "</code> → <code class=\"sig\">" +
-        esc(A.funcName(c.to)) + "</code>" + (c.dynamic ? ' <span class="badge iface">动态</span>' : "") + "</li>";
-    };
-    var moreNote = function (list) {
-      return list.length > 12 ? '<p class="empty">还有 ' + (list.length - 12) + " 条</p>" : "";
-    };
-    var body = "<h3>调用</h3><div class=\"rel\">";
-    body += "<div><b>调用了</b>" + (callsOut.length
-      ? "<ul>" + callsOut.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(callsOut)
-      : '<p class="empty">没有调用模块内函数</p>') + "</div>";
-    body += "<div><b>被调用</b>" + (calledBy.length
-      ? "<ul>" + calledBy.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(calledBy)
-      : '<p class="empty">没有被模块内函数调用</p>') + "</div>";
-    body += "</div>";
-    body += sourceButton(f.pos);
-
-    side.innerHTML = panelFrame({ title: esc(f.name), badges: [{ text: "函数" }], doc: f.doc, body: body,
-      meta: ['<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(f.pos) +
-        (f.metrics ? " " + crapChip(f.metrics.crap) : "")],
-      lead: f.sig ? '<p><code class="sig">' + esc(f.name + f.sig) + "</code></p>" : "" });
-  }
-
-  // renderValue is the inspector for a constant or variable. ValueInfo has no
-  // kind of its own, so the slice it came from decides the badge.
-  function renderValue(v, pkg) {
-    var isConst = (pkg.consts || []).indexOf(v) >= 0;
-    var body = "<h3>声明</h3><table><tbody>";
-    body += '<tr><td class="name">类型</td><td><code class="sig">' + esc(v.type || "—") + "</code></td></tr>";
-    body += '<tr><td class="name">值</td><td><code class="sig">' + esc(v.value || "—") + "</code></td></tr>";
-    body += "</tbody></table>";
-    body += sourceButton(v.pos);
-
-    side.innerHTML = panelFrame({ title: esc(v.name), doc: v.doc, body: body,
-      badges: [{ text: isConst ? "常量" : "变量" }],
-      meta: ['<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(v.pos)] });
   }
 
   function renderSearch() {
@@ -947,60 +615,109 @@
       " · 箭头指向被依赖方 · ▾ 折叠成员";
   }
 
-  // ---------- input ----------
+  // ---------- binding ----------
+  //
+  // Every canvas interaction is delegated through #svg. drawNode returns a
+  // plain group, so a card cannot own a handler that the next render forgets.
 
-  var drag = null;
-  var nodeDrag = null;
-  svg.addEventListener("click", function (e) {
+  function hasClass(node, cls) {
+    return (" " + (node.getAttribute("class") || "") + " ").indexOf(" " + cls + " ") >= 0;
+  }
+
+  // closest walks the parent chain instead of relying on Element.closest, so
+  // the same code works in the page and in the DOM shims used by smoke tests.
+  function closest(target, match) {
+    for (var n = target; n; n = n.parentNode) {
+      if (n.nodeType === 1 && match(n)) return n;
+    }
+    return null;
+  }
+
+  function cardElement(target) {
+    return closest(target, function (n) { return hasClass(n, "node") && n.getAttribute("data-id"); });
+  }
+
+  function actionElement(target) {
+    return closest(target, function (n) { return n.getAttribute && n.getAttribute("data-action"); });
+  }
+
+  function handleCardClick(node) {
+    var card = state.cards.get(node.getAttribute("data-id"));
+    if (!card) return;
+    // A card that is already the current view must not re-render: the
+    // double-click below needs the element to stay alive.
+    if (card.selected) return;
+    // A package's select route is the module view itself; remember which box
+    // was clicked so the module view can show it selected.
+    if (card.href === "#/") state.sel = card.id;
+    go(card.href);
+  }
+
+  function handleCardAction(action) {
+    var node = cardElement(action);
+    if (!node) return;
+    var card = state.cards.get(node.getAttribute("data-id"));
+    if (!card) return;
+    var kind = action.getAttribute("data-action");
+    if (kind === "fold") {
+      state.collapsed = A.toggleCollapsed(state.collapsed, card.id);
+      state.sceneKey = "";
+      render();
+    } else if (kind === "more") {
+      // Open the inspector instead of growing the card: the layout stays put,
+      // so the viewport and the zoom do not move.
+      go(typeHash(card.id));
+    }
+  }
+
+  function drill(card) {
+    var href = card.drillHref;
+    if (!href) return;
+    if (href.charAt(0) === "#") { go(href); return; }
+    if (href.indexOf("/source?") === 0) {
+      if (!state.model.root) return; // an imported IR has no sources behind it
+      href = A.withFrom(href, location.hash || "#/");
+    }
+    window.location.href = href;
+  }
+
+  function onCanvasClick(ev) {
+    var action = actionElement(ev.target);
+    if (action) { ev.stopPropagation(); handleCardAction(action); return; }
+    var node = cardElement(ev.target);
+    if (node) { ev.stopPropagation(); handleCardClick(node); return; }
     // Clicking the empty canvas clears the selection: otherwise a selected card
     // has no way back to the module overview.
-    if (e.target === svg && state.sel) {
+    if (ev.target === svg && state.sel) {
       state.sel = "";
       render();
     }
-  });  svg.addEventListener("mousedown", function (e) {
-    if (e.target.closest(".node")) return;
+  }
+
+  function onCanvasDblClick(ev) {
+    var node = cardElement(ev.target);
+    if (!node) return;
+    ev.stopPropagation();
+    var card = state.cards.get(node.getAttribute("data-id"));
+    if (card) drill(card);
+  }
+
+  var drag = null;
+  svg.addEventListener("click", onCanvasClick);
+  svg.addEventListener("dblclick", onCanvasDblClick);
+  svg.addEventListener("mousedown", function (e) {
+    if (cardElement(e.target) || actionElement(e.target)) return;
     drag = { x: e.clientX, y: e.clientY, tx: state.tx, ty: state.ty };
     svg.classList.add("grabbing");
     e.preventDefault();
   });
   window.addEventListener("mousemove", function (e) {
-    if (nodeDrag && state.scene) {
-      // Cards can be placed by hand: the position is remembered per node id and
-      // reapplied on the next render (editing code, switching filters).
-      var dx = (e.clientX - nodeDrag.sx) / state.k;
-      var dy = (e.clientY - nodeDrag.sy) / state.k;
-      // A shaky click must not turn into a drag: moving and redrawing below the
-      // threshold would replace the card's DOM before the click is dispatched,
-      // and the click would then land on the svg instead.
-      if (!nodeDrag.moved) {
-        if (Math.abs(dx) + Math.abs(dy) <= 6) return;
-        nodeDrag.moved = true;
-      }
-      var pos = { x: nodeDrag.ox + dx, y: nodeDrag.oy + dy };
-      state.moved[nodeDrag.id] = pos;
-      state.scene.nodes.forEach(function (n) {
-        if (n.id === nodeDrag.id) { n.x = pos.x; n.y = pos.y; }
-      });
-      draw(state.scene);
-      return;
-    }
     if (!drag) return;
     state.tx = drag.tx + (e.clientX - drag.x);
     state.ty = drag.ty + (e.clientY - drag.y);
     applyTransform();
   });
   window.addEventListener("mouseup", function () {
-    if (nodeDrag) {
-      state.suppressClick = nodeDrag.moved;
-      // A shaky click must not swallow the next one: the flag is cleared even
-      // if no click event ever follows the drag.
-      if (typeof setTimeout === "function") {
-        setTimeout(function () { state.suppressClick = false; }, 350);
-      }
-      nodeDrag = null;
-      return;
-    }
     if (!drag) return;
     drag = null;
     svg.classList.remove("grabbing");
@@ -1021,7 +738,6 @@
   document.getElementById("reload").addEventListener("click", function () { boot(); });
   document.getElementById("layout").addEventListener("change", function (e) {
     state.layout = e.target.value;
-    state.moved = {}; // hand-placed cards belong to the layout they were placed in
     state.sceneKey = "";
     render();
   });
@@ -1048,9 +764,14 @@
     if (state.q && e.key === "ArrowDown") { e.preventDefault(); moveHit(1); return; }
     if (state.q && e.key === "ArrowUp") { e.preventDefault(); moveHit(-1); return; }
     if (state.q && e.key === "Enter") { e.preventDefault(); openHit(); return; }
-    if (e.key === "Escape" && document.activeElement === qEl) {
-      qEl.value = ""; state.q = ""; state.hits = []; qEl.blur(); render();
-      return;
+    if (e.key === "Escape") {
+      if (document.activeElement === qEl) {
+        qEl.value = ""; state.q = ""; state.hits = []; qEl.blur(); render();
+        return;
+      }
+      // Escape clears a selected package card. There is only one Escape rule,
+      // whether or not the page was focused on the search box.
+      if (state.sel) { state.sel = ""; render(); }
     }
   });
   window.addEventListener("hashchange", function () {
@@ -1074,33 +795,6 @@
     events.onerror = function () {};
   }
 
-  // Card style help: a small panel, so the colours and badges explain themselves.
-  var cardhelp = document.getElementById("cardhelp");
-  var cardhelpBtn = null; // the panel is always visible now
-  if (cardhelpBtn && cardhelp) {
-    cardhelpBtn.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      cardhelp.classList.toggle("open");
-    });
-    cardhelp.addEventListener("click", function (ev) { ev.stopPropagation(); });
-    document.addEventListener("click", function () { cardhelp.classList.remove("open"); });
-    document.addEventListener("keydown", function (ev) {
-      if (ev.key !== "Escape") return;
-      cardhelp.classList.remove("open");
-      if (state.sel) {
-        state.sel = "";
-        render();
-      }
-    });
-  }
-  // Escape clears a selected package card; the help panel's own handler lives
-  // inside a guard that no longer exists, so this one is unconditional.
-  document.addEventListener("keydown", function (ev) {
-    if (ev.key === "Escape" && state.sel) {
-      state.sel = "";
-      render();
-    }
-  });
   // ---------- boot ----------
 
   async function boot() {

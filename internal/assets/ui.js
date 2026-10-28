@@ -28,10 +28,6 @@
     if (sp > n * 0.5) head = head.slice(0, sp);
     return head + '…';
   }
-  function cutOld(s, n) {
-    s = String(s == null ? "" : s);
-    return s.length <= n ? s : s.slice(0, n - 1) + "…";
-  }
 
   function short(p) {
     return String(p).split("/").pop();
@@ -465,12 +461,24 @@
 
   // ---------- layout ----------
 
+  // flowAxis is the one decision that fixes the direction of a scene:
+  // package columns and the kind grid read left to right, the dependency
+  // layered layout reads top to bottom. buildScene passes the result to every
+  // layout function, so no later stage can quietly pick a different flow.
+  function flowAxis(kind, layout) {
+    if (kind === "packages") return "h";
+    return layoutMode(layout) === "kind" ? "h" : "v";
+  }
+
   // layoutPackages puts a package in the column of its import depth: a
-  // package sits one column right of everything it imports.
+  // package sits one column right of everything it imports. The layer is the
+  // depth, so every node in a layer shares the flow coordinate (`x` for the
+  // horizontal flow this view always uses).
   function layoutPackages(pkgs, pkgByPath, opts) {
     opts = opts || {};
     var all = !!opts.all;
     var modelPath = opts.modelPath || "";
+    var axis = opts.axis === "v" ? "v" : "h";
 
     var depth = new Map();
     pkgs.forEach(function (p) { depth.set(p.path, 0); });
@@ -497,8 +505,14 @@
       var list = cols.get(d).slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
       list.forEach(function (p, i) {
         var n = packageCard(p, { modelPath: modelPath, all: all, selected: opts.selected || "" });
-        n.x = 40 + d * 320;
-        n.y = 40 + i * 96;
+        if (axis === "h") {
+          n.x = 40 + d * 320;
+          n.y = 40 + i * 96;
+        } else {
+          n.x = 40 + i * 320;
+          n.y = 40 + d * 96;
+        }
+        n.layer = d;
         nodes.push(n);
       });
     });
@@ -684,12 +698,16 @@
     return rank;
   }
 
-  // layoutTypes places the type cards. Two deterministic modes:
+  // layoutTypes places the type cards. The axis decides the layer shape:
   //
-  //   layer (default) — one band per dependency depth, users on top,
-  //   dependencies below, four cards per line;
-  //   kind — the old grid, grouped struct → interface → type.
+  //   "v" — one band per dependency depth, users on top, dependencies below,
+  //         four cards per line; every node in a band shares `y` and its
+  //         `layer` is the row index;
+  //   "h" — the old grid, grouped struct → interface → type, one layer per
+  //         column; every node in a layer shares `x`.
   //
+  // Function and value bands continue the same layer numbering, so a call
+  // between two cards in one function row is a same-layer edge in both axes.
   // Folded cards keep only their title, which is a view state: the model is
   // untouched.
   function layoutTypes(pkg, types, opts) {
@@ -698,7 +716,8 @@
     var selected = opts.selected || null;
     var collapsed = opts.collapsed || [];
     var expanded = opts.expanded || [];
-    var mode = layoutMode(opts.layout);
+    var axis = opts.axis === "v" || opts.axis === "h"
+      ? opts.axis : (layoutMode(opts.layout) === "kind" ? "h" : "v");
     var edges = opts.edges || [];
     var cardOpts = { all: all, selected: selected, editor: opts.editor, root: opts.root };
 
@@ -717,7 +736,8 @@
     types.forEach(function (t) { kindOf[t.id] = t.kind; });
 
     var placed = [];
-    if (mode === "kind") {
+    var nextLayer = 0;
+    if (axis === "h") {
       var kindOrder = { struct: 0, interface: 1, type: 2 };
       var sorted = cards.slice().sort(function (a, b) {
         var ka = kindOrder[kindOf[a.id]], kb = kindOrder[kindOf[b.id]];
@@ -730,7 +750,7 @@
       for (var c = 0; c < COLS; c++) ys.push(40);
       sorted.forEach(function (card, i) {
         var col = i % COLS;
-        placed.push({ card: card, x: 40 + col * (CARD_W + 40), y: ys[col] });
+        placed.push({ card: card, x: 40 + col * (CARD_W + 40), y: ys[col], layer: col });
         ys[col] += card.h + 26;
       });
     } else {
@@ -747,9 +767,10 @@
           var chunk = list.slice(i, i + PER_ROW);
           var maxH = 0;
           chunk.forEach(function (card, k) {
-            placed.push({ card: card, x: 40 + k * (CARD_W + 40), y: y });
+            placed.push({ card: card, x: 40 + k * (CARD_W + 40), y: y, layer: nextLayer });
             if (card.h > maxH) maxH = card.h;
           });
+          nextLayer++;
           y += maxH + 24;
         }
         y += 24; // gap between dependency depths
@@ -759,24 +780,29 @@
     var nodes = placed.map(function (p) {
       p.card.x = p.x;
       p.card.y = p.y;
+      p.card.layer = p.layer;
       return p.card;
     });
 
     // Function band: package-level functions are nodes too. Go packages are
     // often functions-only (a command, a helpers package), and drawing an empty
-    // canvas made those look broken. They sit under the types, four per row.
+    // canvas made those look broken. They sit under the types, four per row in
+    // a vertical flow and four per column in a horizontal one.
     var fns = visible(pkg.funcs || [], showsAll(pkg, all));
     // bandY is computed even when there are no functions: the value band below
     // uses it too, and an undefined base turned every coordinate into NaN.
     var bandY = 40;
     nodes.forEach(function (n) { bandY = Math.max(bandY, n.y + n.h + 56); });
     if (fns.length) {
+      var fnLayer = nextLayer;
       fns.forEach(function (f, i) {
         var n = funcCard(f, pkg, cardOpts);
         n.x = 40 + (i % PER_ROW) * (CARD_W + 40);
         n.y = bandY + Math.floor(i / PER_ROW) * 76;
+        n.layer = axis === "h" ? (i % PER_ROW) : (fnLayer + Math.floor(i / PER_ROW));
         nodes.push(n);
       });
+      if (axis === "v") nextLayer = fnLayer + Math.ceil(fns.length / PER_ROW);
     }
     // Value band: an embed or constant package holds no types and no functions,
     // so it used to draw an empty canvas. Its consts/vars get cards too.
@@ -787,6 +813,7 @@
         var n = valueCard(v, pkg, cardOpts);
         n.x = 40 + (i % PER_ROW) * (CARD_W + 40);
         n.y = valueY + Math.floor(i / PER_ROW) * 76;
+        n.layer = axis === "h" ? (i % PER_ROW) : (nextLayer + Math.floor(i / PER_ROW));
         nodes.push(n);
       });
     }
@@ -872,10 +899,12 @@
       if (selected && !idx.pkgByPath.has(selected)) selected = "";
       // The module view has one selection: the card the reader clicked. It is
       // separate from the route, which only changes on a double-click.
+      var axis = flowAxis("packages", null);
       var nodes = layoutPackages(pkgs, idx.pkgByPath, {
         modelPath: model.path,
         all: all,
-        selected: selected
+        selected: selected,
+        axis: axis
       });
       var edges = [];
       pkgs.forEach(function (p) {
@@ -917,7 +946,7 @@
         });
       }
       applyMoved(nodes, view.moved);
-      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: "h", selected: selected };
+      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: axis, selected: selected };
     }
 
     var pkg;
@@ -952,12 +981,14 @@
     // Relation pairs are needed before layout (3.1 ranks by them) and again
     // for drawing, so they are computed once.
     var pairs = typePairs(types, idx);
+    var axis = flowAxis("types", view.layout);
     var tnodes = layoutTypes(pkg, types, {
       expanded: view.expanded,
       all: all,
       selected: selectedID,
       collapsed: view.collapsed,
       layout: view.layout,
+      axis: axis,
       edges: pairs,
       editor: model.editor,
       root: model.root
@@ -998,40 +1029,426 @@
       edges: tedges,
       pkg: pkg,
       selected: selectedID,
-      // One flow per view: the layered layout reads top to bottom, the grid
-      // reads left to right.
-      axis: layoutMode(view.layout) === "kind" ? "h" : "v"
+      axis: axis
     };
     applyMoved(scene.nodes, view.moved);
     return scene;
   }
 
+  // ---------- inspector panels ----------
+  //
+  // A panel is one HTML string. panelFrame owns the frame (title, badges, meta,
+  // lead, doc, body); panelHome/panelPkg/panelType/panelFunc/panelValue each own
+  // one declaration kind's sections; panelFor is the single route-to-panel map.
+  // Nothing here touches the document, so ui.test.js can assert that every
+  // declaration with a doc actually renders its doc paragraph.
+
+  function panelFrame(o) {
+    var html = "<h2>" + o.title;
+    (o.badges || []).forEach(function (b) {
+      html += ' <span class="badge' + (b.cls ? " " + b.cls : "") + '">' + esc(b.text) + "</span>";
+    });
+    html += "</h2>";
+    (o.meta || []).forEach(function (line) { html += '<div class="meta">' + line + "</div>"; });
+    if (o.lead) html += o.lead;
+    if (o.doc) html += '<p class="doc">' + esc(o.doc) + "</p>";
+    return html + (o.body || "");
+  }
+
+  // crapCellHTML is the one CRAP table cell, or a dash when go-crap was off.
+  function crapCellHTML(m, model) {
+    if (!m || !m.metrics) return '<td class="meta">—</td>';
+    var mt = m.metrics;
+    return '<td><span class="crap ' + crapLevel(mt.crap, crapThresholds(model)) + '" title="CC ' +
+      mt.cyclomatic + " · 覆盖 " + mt.coverage.toFixed(1) + '%">' + formatCrap(mt.crap) + "</span></td>";
+  }
+
+  function crapChipHTML(v, model) {
+    if (v == null) return "";
+    return '<span class="crap ' + crapLevel(v, crapThresholds(model)) + '">CRAP ' + formatCrap(v) + "</span>";
+  }
+
+  function typeLinkHTML(idx, id, label) {
+    var t = idx.typeById.get(id);
+    if (!t) return "<code>" + esc(label || id) + "</code>";
+    return '<a href="' + typeHash(id) + '">' + esc(label || (t.pkg.name + "." + t.name)) + "</a>";
+  }
+
+  // callLabelHTML turns a function ID into a link to its owner type, or plain
+  // code for a package-level function (or an interface method with no card).
+  function callLabelHTML(idx, id) {
+    var f = idx.funcById.get(id);
+    if (f) {
+      return f.owner ? typeLinkHTML(idx, f.owner, f.name) : '<code class="sig">' + esc(f.name) + "</code>";
+    }
+    var owner = ownerTypeID(id);
+    var name = funcName(id);
+    if (owner && idx.typeById.has(owner)) return typeLinkHTML(idx, owner, name);
+    return '<code class="sig">' + esc(name) + "</code>";
+  }
+
+  function sourceButtonHTML(model, from, pos) {
+    var href = withFrom(editorHref(model && model.editor, model && model.root, pos), from || "#/");
+    return href ? '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>' : "";
+  }
+
+  function chipListHTML(paths, rel) {
+    var html = '<div class="chips">';
+    (paths || []).forEach(function (p) {
+      html += '<a class="chip" href="' + pkgHash(p) + '">' + esc(rel(p)) + "</a>";
+    });
+    return html + "</div>";
+  }
+
+  function homeDetail(p, ctx) {
+    var model = ctx.model, all = showsAll(p, ctx.all);
+    var worst = packageCrap(p);
+    var rel = function (x) { return relPath(model.path, x); };
+    var meta = [esc(rel(p.path)),
+      visible(p.types, all).length + " 类型 · " + visible(p.funcs, all).length + " 函数 · " +
+      visible(valuesOf(p), all).length + " 变量" + (worst != null ? " " + crapChipHTML(worst, model) : "")];
+    var body = "";
+    if (packageChanged(p)) body += '<p><span class="badge diff">已修改</span></p>';
+    body += '<a class="src" href="' + pkgHash(p.path) + '">进入 ' + esc(short(p.path)) + "</a>";
+
+    var imports = p.imports || [];
+    body += "<h3>依赖</h3>";
+    if (!imports.length) body += '<p class="empty">没有模块内依赖</p>';
+    else body += chipListHTML(imports, rel);
+
+    var importers = model.packages.filter(function (q) {
+      return q.path !== p.path && (q.imports || []).indexOf(p.path) >= 0;
+    });
+    body += "<h3>被依赖</h3>";
+    if (!importers.length) body += '<p class="empty">没有其他模块依赖它</p>';
+    else body += chipListHTML(importers.map(function (q) { return q.path; }), rel);
+    return panelFrame({ title: esc(short(p.path)), meta: meta, doc: p.doc, body: body });
+  }
+
+  function panelHome(ctx) {
+    var model = ctx.model, idx = ctx.idx;
+    var sel = ctx.selected ? idx.pkgByPath.get(ctx.selected) : null;
+    var html = sel ? homeDetail(sel, ctx) : panelFrame({ title: "模块总览" });
+    // With a selection the detail leads; the full list stays below so another
+    // module can be picked without going back to the canvas.
+    if (sel) html += "<h3>模块总览</h3>";
+    html += '<div class="meta">' + model.packages.length + " 个包 · 单击方框选中 · 双击进入模块</div>";
+    if (model.metrics) {
+      var s = model.metrics;
+      html += '<div class="meta">CRAP 平均 ' + formatCrap(s.average) + " · 超标 " +
+        s.exceeded + "/" + s.total_funcs + " 个函数</div>";
+    }
+    html += '<ul class="pkg-list">';
+    model.packages.forEach(function (p) {
+      html += '<li><a href="' + pkgHash(p.path) + '"><span>' + esc(relPath(model.path, p.path)) + "</span>" +
+        '<span class="count">' + visible(p.types, ctx.all).length + " 类型 · " +
+        visible(p.funcs, ctx.all).length + " 函数</span></a></li>";
+    });
+    html += "</ul>";
+    return html;
+  }
+
+  function panelPkg(p, ctx) {
+    var model = ctx.model, all = showsAll(p, ctx.all);
+    var rel = function (x) { return relPath(model.path, x); };
+    var body = "";
+    if (p.imports && p.imports.length) {
+      body += "<h3>依赖</h3>" + chipListHTML(p.imports, rel);
+      var bad = p.imports.filter(function (i) {
+        return layerViolation(model.layers, model.path, p.path, i);
+      });
+      if (bad.length) {
+        body += "<h3>违规依赖</h3><ul class=\"rel\">";
+        bad.forEach(function (i) {
+          body += "<li><span class=\"crap bad\">内层→外层</span> " + esc(rel(i)) + "</li>";
+        });
+        body += "</ul>";
+      }
+    }
+    body += "<h3>类型</h3>";
+    var types = visible(p.types, all);
+    if (!types.length) body += '<p class="empty">没有导出类型</p>';
+    else {
+      body += "<table><thead><tr><th>类型</th><th>成员</th></tr></thead><tbody>";
+      types.forEach(function (t) {
+        body += '<tr><td class="name"><a href="' + typeHash(t.id) + '">' + esc(t.name) + "</a> <span class=\"badge " +
+          (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></td><td>" +
+          visible(t.fields, all).length + " 字段 · " + visible(t.methods, all).length + " 方法</td></tr>";
+      });
+      body += "</tbody></table>";
+    }
+    var funcs = visible(p.funcs, all);
+    var metricsOn = !!model.metrics;
+    body += "<h3>函数</h3>";
+    if (!funcs.length) body += '<p class="empty">没有导出函数</p>';
+    else {
+      body += "<table><thead><tr><th>函数</th><th>签名</th>" + (metricsOn ? "<th>CRAP</th>" : "") +
+        "</tr></thead><tbody>";
+      funcs.forEach(function (f) {
+        body += '<tr><td class="name">' + esc(f.name) + '</td><td><code class="sig">' + esc(f.sig) +
+          "</code></td>" + (metricsOn ? crapCellHTML(f, model) : "") + "</tr>";
+      });
+      body += "</tbody></table>";
+    }
+    return panelFrame({
+      title: esc(rel(p.path)),
+      doc: p.doc,
+      body: body,
+      meta: [esc(p.name) + " · " + visible(p.types, ctx.all).length + " 类型 · " +
+        visible(p.funcs, ctx.all).length + " 函数"]
+    });
+  }
+
+  // callListHTML is the one-hop call list shared by the type and function
+  // panels. `item` decides how a call is printed, `list` decides the wording.
+  function callListHTML(title, calls, item, empty) {
+    return "<div><b>" + title + "</b>" + (calls.length
+      ? "<ul>" + calls.slice(0, 12).map(item).join("") + "</ul>" +
+        (calls.length > 12 ? '<p class="empty">还有 ' + (calls.length - 12) + " 条</p>" : "")
+      : '<p class="empty">' + empty + "</p>") + "</div>";
+  }
+
+  function panelType(t, ctx) {
+    var model = ctx.model, idx = ctx.idx;
+    var badges = [{
+      cls: t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : ""),
+      text: t.kind
+    }];
+    if (typeChanged(t)) badges.push({ cls: "diff", text: "改动" });
+
+    var body = "";
+    var fields = visible(t.fields, ctx.all), methods = visible(t.methods, ctx.all);
+    body += "<h3>字段</h3>";
+    if (!fields.length) body += '<p class="empty">没有字段</p>';
+    else {
+      body += "<table><thead><tr><th>字段</th><th>类型</th></tr></thead><tbody>";
+      fields.forEach(function (f) {
+        var typ = (f.refs && f.refs.length)
+          ? f.refs.map(function (r) { return typeLinkHTML(idx, r); }).join(" / ")
+          : '<code class="sig">' + esc(f.type) + "</code>";
+        body += '<tr><td class="name">' + (f.embedded ? "«嵌入»" : esc(f.name)) + "</td><td>" + typ + "</td></tr>";
+      });
+      body += "</tbody></table>";
+    }
+
+    var metricsOn = !!model.metrics;
+    body += "<h3>方法</h3>";
+    if (!methods.length) body += '<p class="empty">没有方法</p>';
+    else {
+      body += "<table><thead><tr><th>方法</th><th>签名</th>" + (metricsOn ? "<th>CRAP</th>" : "") +
+        "</tr></thead><tbody>";
+      methods.forEach(function (m) {
+        body += '<tr><td class="name">' + esc(m.name) + '</td><td><code class="sig">' + esc(m.sig) +
+          "</code></td>" + (metricsOn ? crapCellHTML(m, model) : "") + "</tr>";
+      });
+      body += "</tbody></table>";
+    }
+
+    var out = [];
+    fields.forEach(function (f) { (f.refs || []).forEach(function (r) { out.push({ id: r, label: "字段 " + f.name }); }); });
+    methods.forEach(function (m) { (m.refs || []).forEach(function (r) { out.push({ id: r, label: "方法 " + m.name }); }); });
+    var seen = {};
+    out = out.filter(function (o) { if (seen[o.id]) return false; seen[o.id] = true; return true; });
+    var inc = idx.incoming.get(t.id) || [];
+
+    body += "<h3>关系</h3><div class=\"rel\">";
+    body += "<div><b>引用</b>" + (out.length ? "<ul>" + out.map(function (o) {
+      return "<li>" + esc(o.label) + " → " + typeLinkHTML(idx, o.id) + "</li>";
+    }).join("") + "</ul>" : '<p class="empty">没有引用模块内类型</p>') + "</div>";
+    body += "<div><b>被引用</b>" + (inc.length ? "<ul>" + inc.map(function (o) {
+      var from = idx.typeById.has(o.from) ? typeLinkHTML(idx, o.from)
+        : '<a href="' + pkgHash(o.from) + '">' + esc(relPath(model.path, o.from)) + "</a>";
+      return "<li>" + from + " · " + esc(o.label) + "</li>";
+    }).join("") + "</ul>" : '<p class="empty">没有其他类型或函数引用它</p>') + "</div>";
+    body += "</div>";
+
+    // 2.2: one hop of the call graph, straight from the model.
+    var calls = model.calls || [];
+    if (calls.length) {
+      var callsOut = calls.filter(function (c) { return ownerTypeID(c.from) === t.id; });
+      var calledBy = calls.filter(function (c) { return ownerTypeID(c.to) === t.id; });
+      var item = function (c) {
+        return "<li>" + esc(funcName(c.from)) + " → " + callLabelHTML(idx, c.to) +
+          (c.dynamic ? ' <span class="badge iface">动态</span>' : "") + "</li>";
+      };
+      body += "<h3>调用</h3><div class=\"rel\">" +
+        callListHTML("调用了", callsOut, item, "没有调用模块内函数") +
+        callListHTML("被调用", calledBy, item, "没有被模块内函数调用") + "</div>";
+    }
+    body += sourceButtonHTML(model, ctx.from, t.pos);
+
+    return panelFrame({
+      title: esc(t.name),
+      badges: badges,
+      doc: t.doc,
+      body: body,
+      meta: [esc(relPath(model.path, t.pkg.path)) + " · " + esc(t.pos) +
+        (model.metrics ? " " + crapChipHTML(typeCrap(t), model) : "")]
+    });
+  }
+
+  // panelFunc is the inspector for a package-level function: the type panel's
+  // shape plus the one-hop call list the model already carries.
+  function panelFunc(f, pkg, ctx) {
+    var model = ctx.model;
+    var id = f.id || (pkg.path + "#" + f.name);
+    var calls = model.calls || [];
+    var callsOut = calls.filter(function (c) { return c.from === id; });
+    var calledBy = calls.filter(function (c) { return c.to === id; });
+    var item = function (c) {
+      return "<li><code class=\"sig\">" + esc(funcName(c.from)) + "</code> → <code class=\"sig\">" +
+        esc(funcName(c.to)) + "</code>" + (c.dynamic ? ' <span class="badge iface">动态</span>' : "") + "</li>";
+    };
+    var body = "<h3>调用</h3><div class=\"rel\">" +
+      callListHTML("调用了", callsOut, item, "没有调用模块内函数") +
+      callListHTML("被调用", calledBy, item, "没有被模块内函数调用") + "</div>";
+    body += sourceButtonHTML(model, ctx.from, f.pos);
+
+    return panelFrame({
+      title: esc(f.name),
+      badges: [{ text: "函数" }],
+      doc: f.doc,
+      body: body,
+      meta: ['<a href="' + pkgHash(pkg.path) + '">' + esc(relPath(model.path, pkg.path)) + "</a> · " + esc(f.pos) +
+        (f.metrics ? " " + crapChipHTML(f.metrics.crap, model) : "")],
+      lead: f.sig ? '<p><code class="sig">' + esc(f.name + f.sig) + "</code></p>" : ""
+    });
+  }
+
+  // panelValue is the inspector for a constant or variable. ValueInfo has no
+  // kind of its own, so the slice it came from decides the badge.
+  function panelValue(v, pkg, ctx) {
+    var model = ctx.model;
+    var isConst = (pkg.consts || []).indexOf(v) >= 0;
+    var body = "<h3>声明</h3><table><tbody>";
+    body += '<tr><td class="name">类型</td><td><code class="sig">' + esc(v.type || "—") + "</code></td></tr>";
+    body += '<tr><td class="name">值</td><td><code class="sig">' + esc(v.value || "—") + "</code></td></tr>";
+    body += "</tbody></table>";
+    body += sourceButtonHTML(model, ctx.from, v.pos);
+
+    return panelFrame({
+      title: esc(v.name),
+      doc: v.doc,
+      body: body,
+      badges: [{ text: isConst ? "常量" : "变量" }],
+      meta: ['<a href="' + pkgHash(pkg.path) + '">' + esc(relPath(model.path, pkg.path)) + "</a> · " + esc(v.pos)]
+    });
+  }
+
+  // routePkg resolves the package a route belongs to, so the crumb and the
+  // panel can treat type, function and value routes the same way.
+  function routePkg(route, idx) {
+    if (!route) return undefined;
+    if (route.view === "pkg") return idx.pkgByPath.get(route.path);
+    if (route.view === "func") return (idx.funcByID.get(route.id) || {}).pkg;
+    if (route.view === "value") return (idx.valueByID.get(route.id) || {}).pkg;
+    if (route.view === "type") return (idx.typeById.get(route.id) || {}).pkg;
+    return undefined;
+  }
+
+  // panelFor is the single route-to-panel map. It returns "" only for a route
+  // the index cannot resolve, which the page renders as the module overview.
+  function panelFor(route, scene, ctx) {
+    ctx = ctx || {};
+    if (!route || route.view === "home" || !scene) return panelHome(ctx);
+    if (route.view === "pkg" && scene.pkg) return panelPkg(scene.pkg, ctx);
+    if (route.view === "func") {
+      var fn = ctx.idx.funcByID.get(route.id);
+      if (fn) return panelFunc(fn.decl, fn.pkg, ctx);
+    } else if (route.view === "value") {
+      var val = ctx.idx.valueByID.get(route.id);
+      if (val) return panelValue(val.decl, val.pkg, ctx);
+    } else if (route.view === "type") {
+      var t = ctx.idx.typeById.get(route.id);
+      if (t) return panelType(t, ctx);
+    }
+    return panelHome(ctx);
+  }
+
   // ---------- geometry ----------
 
-  // edgePath routes along the one axis the view was laid out on, so a diagram
-  // reads as a single flow instead of a mix of directions:
+  // edgeRoute is the routing contract: two boxes and the scene axis in, one
+  // concrete route out. It is the only place that decides which border an edge
+  // uses, and it guarantees three things the renderer relies on:
   //
-  //   "v" — top to bottom (layered layout: users above, dependencies below)
-  //   "h" — left to right (grid layout, and the package columns)
+  //   * both endpoints sit exactly on a border, at that border's centreline;
+  //   * the route leaves the source and approaches the target from outside, so
+  //     the arrowhead is never painted inside its own card;
+  //   * flow-layer edges use the flow ports (bottom→top for "v", right→left for
+  //     "h"); edges between two boxes in the same layer use the cross ports
+  //     (side→side for "v", top/bottom for "h") instead of doubling back
+  //     through the target. A same-layer flow-port edge is the diagonal bug.
   //
-  // The path always ends on the target, so one arrow marker does the job.
-  function edgePath(a, b, axis) {
-    if (axis === "h") {
-      var right = b.x + b.w / 2 >= a.x + a.w / 2;
-      var hx1 = right ? a.x + a.w : a.x;
-      var hx2 = right ? b.x : b.x + b.w;
-      var hy1 = a.y + a.h / 2;
-      var hy2 = b.y + b.h / 2;
-      var hmx = (hx1 + hx2) / 2;
-      return "M" + hx1 + "," + hy1 + " C" + hmx + "," + hy1 + " " + hmx + "," + hy2 + " " + hx2 + "," + hy2;
+  // "flow" is the coordinate the axis advances on (y for "v", x for "h");
+  // "cross" is the coordinate inside one layer. Every branch below only swaps
+  // those two roles, so there is one algorithm, not a vertical copy and a
+  // horizontal copy.
+  function edgeRoute(a, b, axis) {
+    var vertical = axis !== "h";
+    var aFlow = vertical ? a.y : a.x, aFlowSize = vertical ? a.h : a.w;
+    var bFlow = vertical ? b.y : b.x, bFlowSize = vertical ? b.h : b.w;
+    var aCross = vertical ? a.x : a.y, aCrossSize = vertical ? a.w : a.h;
+    var bCross = vertical ? b.x : b.y, bCrossSize = vertical ? b.w : b.h;
+    var aFlowMid = aFlow + aFlowSize / 2, bFlowMid = bFlow + bFlowSize / 2;
+    var aCrossMid = aCross + aCrossSize / 2, bCrossMid = bCross + bCrossSize / 2;
+    // Overlapping flow intervals mean the two cards share a layer.
+    var intra = aFlow < bFlow + bFlowSize - 1 && bFlow < aFlow + aFlowSize - 1;
+
+    function point(flow, cross) {
+      return vertical ? { x: cross, y: flow } : { x: flow, y: cross };
     }
-    var down = b.y + b.h / 2 >= a.y + a.h / 2;
-    var vy1 = down ? a.y + a.h : a.y;
-    var vy2 = down ? b.y : b.y + b.h;
-    var vx1 = a.x + a.w / 2;
-    var vx2 = b.x + b.w / 2;
-    var vmy = (vy1 + vy2) / 2;
-    return "M" + vx1 + "," + vy1 + " C" + vx1 + "," + vmy + " " + vx2 + "," + vmy + " " + vx2 + "," + vy2;
+
+    var startFlow, endFlow, startCross, endCross, startSide, endSide;
+    if (intra) {
+      // Same layer: run along the cross axis, from the facing sides.
+      var positive = bCrossMid >= aCrossMid;
+      startFlow = aFlowMid;
+      endFlow = bFlowMid;
+      startCross = positive ? aCross + aCrossSize : aCross;
+      endCross = positive ? bCross : bCross + bCrossSize;
+      startSide = vertical ? (positive ? "right" : "left") : (positive ? "bottom" : "top");
+      endSide = vertical ? (positive ? "left" : "right") : (positive ? "top" : "bottom");
+    } else {
+      // Different layers: run along the flow axis, at the centreline.
+      var forward = bFlowMid >= aFlowMid;
+      startFlow = forward ? aFlow + aFlowSize : aFlow;
+      endFlow = forward ? bFlow : bFlow + bFlowSize;
+      startCross = aCrossMid;
+      endCross = bCrossMid;
+      startSide = vertical ? (forward ? "bottom" : "top") : (forward ? "right" : "left");
+      endSide = vertical ? (forward ? "top" : "bottom") : (forward ? "left" : "right");
+    }
+
+    var start = point(startFlow, startCross);
+    var end = point(endFlow, endCross);
+    var c1, c2;
+    if (intra) {
+      // Controls share each end's flow coordinate and meet in the cross gap.
+      var midCross = (startCross + endCross) / 2;
+      c1 = point(startFlow, midCross);
+      c2 = point(endFlow, midCross);
+    } else {
+      // Controls share each end's cross coordinate and meet in the flow gap.
+      var midFlow = (startFlow + endFlow) / 2;
+      c1 = point(midFlow, startCross);
+      c2 = point(midFlow, endCross);
+    }
+
+    return {
+      axis: vertical ? "v" : "h",
+      intra: intra,
+      start: { x: start.x, y: start.y, side: startSide },
+      end: { x: end.x, y: end.y, side: endSide },
+      c1: c1,
+      c2: c2,
+      d: "M" + start.x + "," + start.y + " C" + c1.x + "," + c1.y +
+        " " + c2.x + "," + c2.y + " " + end.x + "," + end.y
+    };
+  }
+
+  // edgePath keeps the original string API; the route owns the geometry.
+  function edgePath(a, b, axis) {
+    return edgeRoute(a, b, axis).d;
   }
 
   // applyMoved drops the positions a user dragged onto the freshly laid out
@@ -1103,6 +1520,7 @@
     valueCard: valueCard,
     packageCard: packageCard,
     layoutPackages: layoutPackages,
+    flowAxis: flowAxis,
     typeRows: typeRows,
     layoutTypes: layoutTypes,
     rankTypes: rankTypes,
@@ -1125,8 +1543,12 @@
     valuesOf: valuesOf,
     valueSub: valueSub,
     buildScene: buildScene,
+    edgeRoute: edgeRoute,
     edgePath: edgePath,
     applyMoved: applyMoved,
-    fitTransform: fitTransform
+    fitTransform: fitTransform,
+    panelFrame: panelFrame,
+    panelFor: panelFor,
+    routePkg: routePkg
   };
 });
