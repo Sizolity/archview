@@ -177,3 +177,38 @@ func TestEDNSlug(t *testing.T) {
 		}
 	}
 }
+
+// The upstream IR carries visibility as :private on the member, so an exported
+// document must say which members the package does not expose.
+func TestEDNMarksPrivateMembers(t *testing.T) {
+	m := &model.Module{Packages: []*model.Package{{
+		Path: "p", Name: "p",
+		Types: []*model.TypeInfo{{
+			ID: "p#T", Name: "T", Kind: "struct",
+			Fields: []model.FieldInfo{
+				{Name: "Pub", Type: "int", Exported: true},
+				{Name: "priv", Type: "int"},
+			},
+			Methods: []model.MethodInfo{
+				{Name: "Pub", Sig: "()", Exported: true},
+				{Name: "priv", Sig: "()"},
+			},
+		}},
+	}}}
+	doc := string(EDN(m))
+	if n := strings.Count(doc, ":private true"); n != 2 {
+		t.Fatalf(":private appears %d times, want 2:\n%s", n, doc)
+	}
+
+	back, _, err := Import([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ := back.Packages[0].Types[0]
+	if typ.Fields[0].Exported != true || typ.Fields[1].Exported != false {
+		t.Fatalf("fields = %+v", typ.Fields)
+	}
+	if typ.Methods[0].Exported != true || typ.Methods[1].Exported != false {
+		t.Fatalf("methods = %+v", typ.Methods)
+	}
+}

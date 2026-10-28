@@ -69,6 +69,15 @@ func EDN(m *model.Module) []byte {
 	return []byte(b.String())
 }
 
+// privateFlag marks a member as package-visible: the upstream IR carries the
+// distinction as :private rather than dropping the member.
+func privateFlag(exported bool) string {
+	if exported {
+		return ""
+	}
+	return " :private true"
+}
+
 func writeEDNClass(b *strings.Builder, id string, t *model.TypeInfo) {
 	stereotype := ":class"
 	if t.Kind == "interface" {
@@ -88,7 +97,7 @@ func writeEDNClass(b *strings.Builder, id string, t *model.TypeInfo) {
 			// An embedded field has no name of its own; the type is the name.
 			name = f.Type
 		}
-		b.WriteString(fmt.Sprintf("{:name %s :type %s}", ednString(name), ednString(f.Type)))
+		b.WriteString(fmt.Sprintf("{:name %s :type %s%s}", ednString(name), ednString(f.Type), privateFlag(f.Exported)))
 	}
 	b.WriteString("]")
 
@@ -107,7 +116,7 @@ func writeEDNClass(b *strings.Builder, id string, t *model.TypeInfo) {
 		if returns != "" {
 			b.WriteString(" :returns " + ednString(returns))
 		}
-		b.WriteString("}")
+		b.WriteString(privateFlag(mt.Exported) + "}")
 	}
 	b.WriteString("]}")
 }

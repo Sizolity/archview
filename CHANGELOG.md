@@ -6,17 +6,28 @@ Notable changes, newest first. The format follows
 [RELEASING.md](RELEASING.md). A tag without a section here fails the release
 workflow.
 
-## Unreleased
+## [0.3.0] - 2026-10-28
+
+### Added
+
+- `package main` is modelled as the program entry (`Package.Main`): the card
+  says "程序入口", carries a badge, and always shows its unexported members —
+  an entry has no exported API, so the default filter used to draw it empty.
+- Packages that contain changes are marked in the module view, so the graph you
+  land on after starting points at the work.
+- The model's warnings are shown in a strip under the toolbar: a failed
+  go-crap, git diff or type check used to look exactly like a healthy run.
+- EDN export writes `:private true` on package-visible members, matching the
+  upstream IR, and the importer reads it back.
 
 ### Fixed
 
-- `-diff`: the hunk parser matched `+++`/`@@` by line prefix, so a changed
-  source line that began with either could be read as a diff header. It now
-  tracks hunk state. Quoted paths (spaces, non-ASCII) kept their `b/` prefix
-  because the prefix was trimmed before unquoting.
-- `/source` followed symlinks out of the module; it now resolves the path and
-  requires it to stay under the root.
-
+- `-diff`: the parser tracked headers by line prefix, so a changed source line
+  starting with `+++`/`@@` could be read as a header; quoted paths kept their
+  `b/` prefix. A diff that touched no declaration no longer leaves an empty
+  summary on the model.
+- `/source` followed symlinks out of the module.
+- A failed `-diff` is logged instead of only recorded in the model.
 ## [0.2.0] - 2026-10-28
 
 ### Added

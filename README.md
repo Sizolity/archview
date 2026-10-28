@@ -158,7 +158,8 @@ archview -edn view.edn
 reads: `:packages` of `:classes` with `:fields` and `:ops`, plus `:edges`.
 Relations map to the IR's edge kinds — `uses` → `:association`, `implements` →
 `:implements`, `embeds` → `:aggregation` — and class ids are stable slugs
-(`wiki.Page` → `:wiki-page`). When CRAP was collected, each class also carries
+(`wiki.Page` → `:wiki-page`); members the package does not expose carry
+`:private true`, the flag the upstream IR defines. When CRAP was collected, each class also carries
 `:crap` (the mean of its methods) and `:coverage` as a 0–1 ratio.
 
 The other direction reads an IR back:

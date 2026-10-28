@@ -292,7 +292,7 @@ func Import(src []byte) (*model.Module, int, error) {
 				t.Fields = append(t.Fields, model.FieldInfo{
 					Name:     ednAsString(fm["name"]),
 					Type:     ednAsString(fm["type"]),
-					Exported: true,
+					Exported: !isPrivate(fm),
 				})
 			}
 			for _, ov := range ednAsList(cm["ops"]) {
@@ -318,7 +318,7 @@ func Import(src []byte) (*model.Module, int, error) {
 					ID:       t.ID + "." + opName,
 					Name:     opName,
 					Sig:      sig,
-					Exported: true,
+					Exported: !isPrivate(om),
 				})
 			}
 
@@ -392,4 +392,19 @@ func ednAsStringList(v any) []string {
 		out = append(out, ednAsString(item))
 	}
 	return out
+}
+
+// isPrivate reads the :private flag the upstream IR puts on a member.
+func isPrivate(m map[string]any) bool {
+	v, ok := m["private"]
+	if !ok {
+		return false
+	}
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return x == "true"
+	}
+	return false
 }
