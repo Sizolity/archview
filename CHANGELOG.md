@@ -8,6 +8,10 @@ workflow.
 
 ## Unreleased
 
+- Function and value cards can be selected like type cards: clicking one opens a
+  detail panel (`#/func/<id>`, `#/value/<id>`) with its package, position, doc,
+  CRAP (functions) and calls; double-click still opens the source.
+
 - Cards carry a hover tooltip with the untruncated text, and the elision line is
   clickable to expand that card in place. Truncation now breaks at a word.
 

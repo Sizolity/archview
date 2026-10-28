@@ -121,11 +121,19 @@
     if (parts[0] === "type" && parts[1]) {
       return { view: "type", id: decodeURIComponent(parts.slice(1).join("/")) };
     }
+    if (parts[0] === "func" && parts[1]) {
+      return { view: "func", id: decodeURIComponent(parts.slice(1).join("/")) };
+    }
+    if (parts[0] === "value" && parts[1]) {
+      return { view: "value", id: decodeURIComponent(parts.slice(1).join("/")) };
+    }
     return { view: "home" };
   }
 
   function pkgHash(path) { return "#/pkg/" + encodeURIComponent(path); }
   function typeHash(id) { return "#/type/" + encodeURIComponent(id); }
+  function funcHash(id) { return "#/func/" + encodeURIComponent(id); }
+  function valueHash(id) { return "#/value/" + encodeURIComponent(id); }
 
   function parsePos(pos) {
     var s = String(pos == null ? "" : pos);
@@ -281,7 +289,9 @@
     var pkgByPath = new Map();
     var typeById = new Map();
     var incoming = new Map();
-    var funcById = new Map();
+    var funcById = new Map(); // call-graph labels, keyed by method/function ID
+    var funcByID = new Map(); // route lookups: declaration ID -> {pkg, decl}
+    var valueByID = new Map();
 
     model.packages.forEach(function (p) {
       p.types = p.types || [];
@@ -299,8 +309,18 @@
         });
       });
       p.funcs.forEach(function (f) {
+        // Cards use the declaration ID when the model has one and fall back to
+        // the "<pkg>#<Name>" form otherwise, so index the same key the card uses.
+        var id = f.id || (p.path + "#" + f.name);
+        funcByID.set(id, { pkg: p, decl: f });
         if (!f.id) return;
         funcById.set(f.id, { id: f.id, name: f.name, owner: "", pkg: p });
+      });
+      (p.consts || []).forEach(function (v) {
+        valueByID.set(p.path + "#" + v.name, { pkg: p, decl: v });
+      });
+      (p.vars || []).forEach(function (v) {
+        valueByID.set(p.path + "#" + v.name, { pkg: p, decl: v });
       });
     });
 
@@ -327,7 +347,14 @@
       });
     });
 
-    return { pkgByPath: pkgByPath, typeById: typeById, incoming: incoming, funcById: funcById };
+    return {
+      pkgByPath: pkgByPath,
+      typeById: typeById,
+      incoming: incoming,
+      funcById: funcById,
+      funcByID: funcByID,
+      valueByID: valueByID
+    };
   }
 
   // ---------- layout ----------
@@ -692,8 +719,9 @@
     nodes.forEach(function (n) { bandY = Math.max(bandY, n.y + n.h + 56); });
     if (fns.length) {
       fns.forEach(function (f, i) {
+        var id = f.id || (pkg.path + "#" + f.name);
         nodes.push({
-          id: f.id || (pkg.path + "#" + f.name),
+          id: id,
           kind: "func",
           x: 40 + (i % PER_ROW) * (CARD_W + 40),
           y: bandY + Math.floor(i / PER_ROW) * 76,
@@ -704,8 +732,8 @@
           pos: f.pos,
           crap: f.metrics ? f.metrics.crap : null,
           changed: !!f.changed,
-          href: pkgHash(pkg.path),
-          selected: selected === f.id
+          href: funcHash(id),
+          selected: selected === id
         });
       });
     }
@@ -715,8 +743,9 @@
     if (values.length) {
       var valueY = fns.length ? bandY + Math.ceil(fns.length / PER_ROW) * 76 : bandY;
       values.forEach(function (v, i) {
+        var id = pkg.path + "#" + v.name;
         nodes.push({
-          id: pkg.path + "#" + v.name,
+          id: id,
           kind: "value",
           x: 40 + (i % PER_ROW) * (CARD_W + 40),
           y: valueY + Math.floor(i / PER_ROW) * 76,
@@ -726,8 +755,8 @@
           sub: valueSub(v),
           pos: v.pos,
           changed: !!v.changed,
-          href: pkgHash(pkg.path),
-          selected: false
+          href: valueHash(id),
+          selected: selected === id
         });
       });
     }
@@ -796,6 +825,12 @@
     if (route.view === "type") {
       var selectedType = idx.typeById.get(route.id);
       pkg = selectedType ? selectedType.pkg : null;
+    } else if (route.view === "func") {
+      var selectedFunc = idx.funcByID.get(route.id);
+      pkg = selectedFunc ? selectedFunc.pkg : null;
+    } else if (route.view === "value") {
+      var selectedValue = idx.valueByID.get(route.id);
+      pkg = selectedValue ? selectedValue.pkg : null;
     } else {
       pkg = idx.pkgByPath.get(route.path);
     }
@@ -809,13 +844,19 @@
       if (chosen && types.indexOf(chosen) < 0) types.push(chosen);
     }
 
+    // A function or value route shows the owning package's usual type view and
+    // only marks the declaration the URL names.
+    var selectedID = route.view === "type" || route.view === "func" || route.view === "value"
+      ? route.id
+      : null;
+
     // Relation pairs are needed before layout (3.1 ranks by them) and again
     // for drawing, so they are computed once.
     var pairs = typePairs(types, idx);
     var tnodes = layoutTypes(pkg, types, {
       expanded: view.expanded,
       all: all,
-      selected: route.view === "type" ? route.id : null,
+      selected: selectedID,
       collapsed: view.collapsed,
       declutter: view.declutter,
       layout: view.layout,
@@ -869,12 +910,14 @@
       nodes: tnodes,
       edges: tedges,
       pkg: pkg,
-      selected: route.view === "type" ? route.id : null,
+      selected: selectedID,
       // One flow per view: the layered layout reads top to bottom, the grid
       // reads left to right.
       axis: layoutMode(view.layout) === "kind" ? "h" : "v"
     };
-    if (view.declutter) scene = declutterScene(scene, scene.selected);
+    // Declutter is a type-view filter: a function or value selection has no
+    // edges of its own, so leave the package's edges untouched.
+    if (view.declutter && route.view === "type") scene = declutterScene(scene, scene.selected);
     if (view.focus) scene = focusScene(scene, view.focus);
     applyMoved(scene.nodes, view.moved);
     return scene;
@@ -961,6 +1004,8 @@
     parseHash: parseHash,
     pkgHash: pkgHash,
     typeHash: typeHash,
+    funcHash: funcHash,
+    valueHash: valueHash,
     parsePos: parsePos,
     sourceHref: sourceHref,
     withFrom: withFrom,

@@ -232,7 +232,7 @@
     tx: 0, ty: 0, k: 1, sceneKey: "", scene: null
   };
 
-  var idx = { pkgByPath: new Map(), typeById: new Map(), incoming: new Map() };
+  var idx = { pkgByPath: new Map(), typeById: new Map(), incoming: new Map(), funcByID: new Map(), valueByID: new Map() };
 
   function rel(p) { return A.relPath(state.model && state.model.path, p); }
   function vis(list) { return A.visible(list, state.all); }
@@ -471,7 +471,7 @@
         if (state.suppressClick) return;
         // A card that is already the current view must not re-render: the
         // double-click below needs the element to stay alive.
-        if (n.selected || n.kind === "func") return;
+        if (n.selected) return;
         go(n.href);
       });
       // Double-click drills into the source: the card is the last level of the
@@ -517,16 +517,25 @@
     return '<a href="' + typeHash(id) + '">' + esc(label || (t.pkg.name + "." + t.name)) + "</a>";
   }
 
+  // routePkg resolves the package a route belongs to, so the crumb and the
+  // side panel can treat type, function and value views the same way.
+  function routePkg(r) {
+    if (r.view === "pkg") return idx.pkgByPath.get(r.path);
+    if (r.view === "func") return (idx.funcByID.get(r.id) || {}).pkg;
+    if (r.view === "value") return (idx.valueByID.get(r.id) || {}).pkg;
+    return (idx.typeById.get(r.id) || {}).pkg;
+  }
+
   function renderCrumb() {
     var r = state.route;
     if (r.view === "home") { crumb.innerHTML = "<b>模块总览</b>"; return; }
-    var pkg = r.view === "pkg" ? idx.pkgByPath.get(r.path) : (idx.typeById.get(r.id) || {}).pkg;
+    var pkg = routePkg(r);
     if (!pkg) { crumb.innerHTML = '<a href="#/">模块总览</a>'; return; }
     var html = '<a href="#/">模块总览</a><span class="sep">/</span>';
-    if (r.view === "type") {
-      html += '<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + '</a><span class="sep">/</span><b>' + esc(short(r.id.split("#").pop())) + "</b>";
-    } else {
+    if (r.view === "pkg") {
       html += "<b>" + esc(rel(pkg.path)) + "</b>";
+    } else {
+      html += '<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + '</a><span class="sep">/</span><b>' + esc(short(r.id.split("#").pop())) + "</b>";
     }
     crumb.innerHTML = html;
   }
@@ -536,6 +545,18 @@
     var r = state.route;
     if (r.view === "home" || !scene) { renderHome(); return; }
     if (r.view === "pkg" && scene.pkg) { renderPkg(scene.pkg); return; }
+    if (r.view === "func") {
+      var fn = idx.funcByID.get(r.id);
+      if (!fn) { renderHome(); return; }
+      renderFunc(fn.decl, fn.pkg);
+      return;
+    }
+    if (r.view === "value") {
+      var val = idx.valueByID.get(r.id);
+      if (!val) { renderHome(); return; }
+      renderValue(val.decl, val.pkg);
+      return;
+    }
     var t = idx.typeById.get(r.id);
     if (!t) { renderHome(); return; }
     renderType(t);
@@ -682,6 +703,60 @@
     }
 
     var href = A.withFrom(sourceHref(t.pos), location.hash || "#/");
+    if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
+    side.innerHTML = html;
+  }
+
+  // renderFunc is the inspector for a package-level function: the type panel's
+  // shape plus the one-hop call list the model already carries.
+  function renderFunc(f, pkg) {
+    var html = "<h2>" + esc(f.name) + ' <span class="badge">函数</span></h2>';
+    html += '<div class="meta"><a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(f.pos) +
+      (f.metrics ? " " + crapChip(f.metrics.crap) : "") + "</div>";
+    if (f.sig) html += '<p><code class="sig">' + esc(f.name + f.sig) + "</code></p>";
+    if (f.doc) html += '<p class="doc">' + esc(f.doc) + "</p>";
+
+    // Calls are stored at function granularity (2.2), so the exact declaration
+    // ID is enough: there is no owner type to aggregate here.
+    var id = f.id || (pkg.path + "#" + f.name);
+    var calls = state.model.calls || [];
+    var callsOut = calls.filter(function (c) { return c.from === id; });
+    var calledBy = calls.filter(function (c) { return c.to === id; });
+    var callItem = function (c) {
+      return "<li><code class=\"sig\">" + esc(A.funcName(c.from)) + "</code> → <code class=\"sig\">" +
+        esc(A.funcName(c.to)) + "</code>" + (c.dynamic ? ' <span class="badge iface">动态</span>' : "") + "</li>";
+    };
+    var moreNote = function (list) {
+      return list.length > 12 ? '<p class="empty">还有 ' + (list.length - 12) + " 条</p>" : "";
+    };
+    html += "<h3>调用</h3><div class=\"rel\">";
+    html += "<div><b>调用了</b>" + (callsOut.length
+      ? "<ul>" + callsOut.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(callsOut)
+      : '<p class="empty">没有调用模块内函数</p>') + "</div>";
+    html += "<div><b>被调用</b>" + (calledBy.length
+      ? "<ul>" + calledBy.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(calledBy)
+      : '<p class="empty">没有被模块内函数调用</p>') + "</div>";
+    html += "</div>";
+
+    var href = A.withFrom(sourceHref(f.pos), location.hash || "#/");
+    if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
+    side.innerHTML = html;
+  }
+
+  // renderValue is the inspector for a constant or variable. ValueInfo has no
+  // kind of its own, so the slice it came from decides the badge.
+  function renderValue(v, pkg) {
+    var isConst = (pkg.consts || []).indexOf(v) >= 0;
+    var html = "<h2>" + esc(v.name) + ' <span class="badge">' + (isConst ? "常量" : "变量") + "</span></h2>";
+    html += '<div class="meta"><a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(v.pos) + "</div>";
+    if (v.doc) html += '<p class="doc">' + esc(v.doc) + "</p>";
+
+    html += "<h3>声明</h3><table><tbody>";
+    html += '<tr><td class="name">类型</td><td><code class="sig">' + esc(v.type || "—") + "</code></td></tr>";
+    html += '<tr><td class="name">值</td><td><code class="sig">' + esc(v.value || "—") + "</code></td></tr>";
+    html += "</tbody></table>";
+
+    var href = A.withFrom(sourceHref(v.pos), location.hash || "#/");
     if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
     side.innerHTML = html;
   }

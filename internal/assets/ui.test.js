@@ -83,6 +83,20 @@ test("parseHash round-trips the hashes the UI builds", () => {
   }
 });
 
+test("parseHash routes functions and values", () => {
+  assert.deepEqual(ui.parseHash(ui.funcHash("example.com/app#New")), {
+    view: "func",
+    id: "example.com/app#New"
+  });
+  assert.deepEqual(ui.parseHash(ui.valueHash("example.com/app#MaxRetries")), {
+    view: "value",
+    id: "example.com/app#MaxRetries"
+  });
+  for (const h of ["#/func/", "#/value/"]) {
+    assert.deepEqual(ui.parseHash(h), { view: "home" }, `hash ${JSON.stringify(h)}`);
+  }
+});
+
 test("esc escapes the five HTML metacharacters", () => {
   assert.equal(ui.esc(`<a href="x">&'`), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
   assert.equal(ui.esc(null), "");
@@ -221,6 +235,61 @@ test("buildScene marks the type named by the route as selected", () => {
   const selected = scene.nodes.filter((n) => n.selected);
   assert.deepEqual(selected.map((n) => n.id), ["example.com/app#Server"]);
   assert.equal(scene.selected, "example.com/app#Server");
+});
+
+test("buildScene opens the owning package for a function route", () => {
+  const model = fixture();
+  model.packages[0].funcs[0] = {
+    id: "example.com/app#New",
+    name: "New",
+    sig: "() *Server",
+    pos: "app.go:42",
+    exported: true,
+    refs: ["example.com/app#Server"]
+  };
+  const idx = ui.indexModel(model);
+  const route = { view: "func", id: "example.com/app#New" };
+  const scene = ui.buildScene(model, idx, route, false);
+  const pkgScene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+
+  assert.equal(scene.kind, "types");
+  assert.deepEqual(scene.nodes.map((n) => n.id), pkgScene.nodes.map((n) => n.id));
+  assert.deepEqual(scene.edges, pkgScene.edges);
+
+  const selected = scene.nodes.filter((n) => n.selected);
+  assert.deepEqual(selected.map((n) => n.id), ["example.com/app#New"]);
+  assert.equal(selected[0].href, ui.funcHash("example.com/app#New"));
+  assert.equal(scene.selected, "example.com/app#New");
+
+  assert.equal(idx.funcByID.get(route.id).decl.name, "New");
+  assert.equal(idx.funcByID.get(route.id).pkg.path, "example.com/app");
+});
+
+test("buildScene opens the owning package for a value route", () => {
+  const model = fixture();
+  model.packages[0].consts = [{
+    name: "MaxRetries",
+    type: "int",
+    value: "3",
+    pos: "app.go:9",
+    exported: true
+  }];
+  const idx = ui.indexModel(model);
+  const route = { view: "value", id: "example.com/app#MaxRetries" };
+  const scene = ui.buildScene(model, idx, route, false);
+  const pkgScene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+
+  assert.equal(scene.kind, "types");
+  assert.deepEqual(scene.nodes.map((n) => n.id), pkgScene.nodes.map((n) => n.id));
+  assert.deepEqual(scene.edges, pkgScene.edges);
+
+  const selected = scene.nodes.filter((n) => n.selected);
+  assert.deepEqual(selected.map((n) => n.id), ["example.com/app#MaxRetries"]);
+  assert.equal(selected[0].href, ui.valueHash("example.com/app#MaxRetries"));
+  assert.equal(scene.selected, "example.com/app#MaxRetries");
+
+  assert.equal(idx.valueByID.get(route.id).decl.name, "MaxRetries");
+  assert.equal(idx.valueByID.get(route.id).pkg.path, "example.com/app");
 });
 
 test("buildScene falls back to the home view for an unknown package", () => {
