@@ -1020,6 +1020,9 @@ test("a package of variables gets value cards and a count", () => {
   const values = pkgScene.nodes.filter((n) => n.kind === "value");
   assert.deepEqual(values.map((n) => n.title).sort(), ["CSS", "JS", "UI"]);
   assert.ok(values.every((n) => n.sub.indexOf("[]byte") >= 0), JSON.stringify(values.map((n) => n.sub)));
+  // Every card must have finite coordinates: NaN draws an invisible card.
+  assert.ok(values.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y) && Number.isFinite(n.w) && Number.isFinite(n.h)),
+    JSON.stringify(values.map((n) => [n.x, n.y, n.w, n.h])));
 
   const home = ui.buildScene(model, idx, { view: "home" }, false);
   assert.ok(home.nodes[0].lines[0].indexOf("3 变量") >= 0, home.nodes[0].lines[0]);

@@ -655,9 +655,11 @@
     // often functions-only (a command, a helpers package), and drawing an empty
     // canvas made those look broken. They sit under the types, four per row.
     var fns = visible(pkg.funcs || [], showsAll(pkg, all));
+    // bandY is computed even when there are no functions: the value band below
+    // uses it too, and an undefined base turned every coordinate into NaN.
+    var bandY = 40;
+    nodes.forEach(function (n) { bandY = Math.max(bandY, n.y + n.h + 56); });
     if (fns.length) {
-      var bandY = 40;
-      nodes.forEach(function (n) { bandY = Math.max(bandY, n.y + n.h + 56); });
       fns.forEach(function (f, i) {
         nodes.push({
           id: f.id || (pkg.path + "#" + f.name),
