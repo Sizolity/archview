@@ -638,6 +638,7 @@
     var worst = A.packageCrap(p);
     if (worst != null) html += " " + crapChip(worst);
     html += "</div>";
+    if (p.doc) html += '<p class="doc">' + esc(p.doc) + "</p>";
     if (A.packageChanged(p)) html += '<p><span class="badge diff">已修改</span></p>';
     html += '<a class="src" href="' + pkgHash(p.path) + '">进入 ' + esc(short(p.path)) + "</a>";
 
