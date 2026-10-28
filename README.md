@@ -9,19 +9,26 @@ module.
 
 ## Run
 
-Build once and run the binary from the module you want to inspect:
+Install it into your Go toolchain, then run it from the module you want to
+inspect:
+
+```sh
+go install github.com/Sizolity/archview/cmd/archview@latest
+
+cd /path/to/your/project
+archview                     # http://127.0.0.1:8788
+```
+
+Or build from a checkout:
 
 ```sh
 go build -o archview ./cmd/archview
-
-cd /path/to/your/project
-/path/to/archview            # http://127.0.0.1:8788
 ```
 
 Or run it from source:
 
 ```sh
-go run . -addr 127.0.0.1:8788
+go run ./cmd/archview -addr 127.0.0.1:8788
 ```
 
 Scan another directory, or a `go.work` workspace:

@@ -52,7 +52,7 @@
 `2.3` → `4.3`→`3.4`→`3.2`→`3.1`→`2.2` → `4.5`→`4.4`→`2.4`→`5.3`。
 理由:`2.2` 要 `2.1` 的 `types.Info`,`3.1` 要 `2.1` 的 `embeds`/`implements` 边,
 `3.4` 要 `4.3` 的 `layers` 配置,`4.1` 与 `4.2` 改同一处取数/链接代码。
-已完成:`2.1`、`2.2`、`2.3`、`2.4`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.4`、`4.5`、`5.1`、`5.2`;部分:`5.3`(版本、发布配置、设计文档已完成;差打 tag 与截图)。
+已完成:`2.1`、`2.2`、`2.3`、`2.4`、`3.1`、`3.2`、`3.3`、`3.4`、`4.1`、`4.2`、`4.3`、`4.4`、`4.5`、`5.1`、`5.2`、`5.3`(唯一没做:README 截图)。
 
 ## 2. 数据与关系
 
@@ -376,7 +376,7 @@ fixture(`testdata/exclude`)。
 - [x] 故意留一个格式错误能被 CI 拦住;
 - [x] 无源码探测式跳过。
 
-### 5.3 发布与文档(P2) — 部分完成 2026-10-27
+### 5.3 发布与文档(P2) — 已完成 2026-10-28
 
 已做:
 
@@ -387,16 +387,25 @@ fixture(`testdata/exclude`)。
 - `docs/design.md`:数据流、模型 schema、端点、性能取舍;
 - README 补齐 `-out`/`-editor`/`-dir`/`-config` 与配置字段表。
 
-未做:
+发布实测(`v0.1.0`,2026-10-28):推送 tag 触发 `.github/workflows/release.yml`,goreleaser
+产出 6 个二进制 + `checksums.txt`:
+<https://github.com/Sizolity/archview/releases/tag/v0.1.0>
+(linux/darwin/windows × amd64/arm64)。
 
-- 真的打 tag 跑 goreleaser(需要远端仓库与标签,本地无法验证);
-- README 截图(要真实浏览器截图,属于 §7 的同一笔欠账)。
+安装两条路径都验证过:
+
+- 从源码:`go install ./cmd/archview` → `archview dev`;
+- 从已发布模块:`GOPROXY=direct go install github.com/Sizolity/archview/cmd/archview@latest`
+  → 下载伪版本并安装成功。
 
 验收状态:
 
-- [ ] 打 tag 后 release 页面有三平台产物 —— 需要你打 tag;
+- [x] 打 tag 后 release 页面有三平台产物(实际是 6 个,含 arm64);
 - [x] 新机器按 README 两步跑起来;
-- [x] `go install` 的二进制与 `go build` 行为一致(同一条 main,只有版本号不同)。
+- [x] `go install` 的二进制与 `go build` 行为一致(同一条 main;`go install` 不注
+      ldflags,所以版本显示 `dev`,release 产物显示 `0.1.0`)。
+
+未做:README 截图(要真实浏览器截图,属于 §7 的同一笔欠账)。
 
 ## 6. 明确不做
 
