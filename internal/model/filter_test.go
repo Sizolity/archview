@@ -2,10 +2,11 @@ package model
 
 import (
 	"context"
-	"github.com/Sizolity/archview/internal/config"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Sizolity/archview/internal/config"
 )
 
 func TestExcludedMatchesWholeSegments(t *testing.T) {

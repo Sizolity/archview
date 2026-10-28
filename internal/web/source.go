@@ -88,14 +88,8 @@ func writeLine(b *strings.Builder, data []byte, start, end int, spans []span) {
 		if s.start >= end {
 			break
 		}
-		from := s.start
-		if from < start {
-			from = start
-		}
-		to := s.end
-		if to > end {
-			to = end
-		}
+		from := max(s.start, start)
+		to := min(s.end, end)
 		if to <= from {
 			continue
 		}

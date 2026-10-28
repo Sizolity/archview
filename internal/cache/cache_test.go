@@ -3,12 +3,13 @@ package cache
 import (
 	"context"
 	"errors"
-	"github.com/Sizolity/archview/internal/model"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 func writeSource(t *testing.T, path, body string) {

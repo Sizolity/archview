@@ -5,13 +5,14 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"github.com/Sizolity/archview/internal/cache"
-	"github.com/Sizolity/archview/internal/model"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Sizolity/archview/internal/cache"
+	"github.com/Sizolity/archview/internal/model"
 )
 
 // Server serves the explorer UI, the model snapshot and a read-only source view.

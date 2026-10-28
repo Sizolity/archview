@@ -2,11 +2,12 @@ package export
 
 import (
 	"context"
-	"github.com/Sizolity/archview/internal/model"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 func TestParseEDNBasics(t *testing.T) {

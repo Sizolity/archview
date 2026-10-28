@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/Sizolity/archview/internal/config"
 	"go/ast"
 	"go/parser"
 	"go/printer"
@@ -23,6 +22,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/Sizolity/archview/internal/config"
 )
 
 // Module is the whole JSON payload the browser reads.
@@ -119,8 +120,9 @@ type listed struct {
 // Load scans the module in the current working directory.
 func Load(ctx context.Context) (*Module, error) { return LoadWith(ctx, "", nil) }
 
-// load scans the module rooted at dir; "" means the process working directory.
-// Tests point it at a fixture so they never depend on where go test runs.
+// LoadDir scans the module rooted at dir; "" means the process working
+// directory. Tests point it at a fixture so they never depend on where go test
+// runs.
 func LoadDir(ctx context.Context, dir string) (*Module, error) { return LoadWith(ctx, dir, nil) }
 
 // LoadWith scans dir with the config's excludes and layers applied. A go.work

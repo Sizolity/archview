@@ -56,7 +56,7 @@ func TestEventsStreamsReload(t *testing.T) {
 	}
 
 	s.Watch.Notify()
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		line, err = br.ReadString('\n')
 		if err != nil {
 			t.Fatalf("reading events: %v", err)

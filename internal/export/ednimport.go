@@ -2,10 +2,11 @@ package export
 
 import (
 	"fmt"
-	"github.com/Sizolity/archview/internal/model"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 // This file reads the topology IR back into a model. The reader covers the EDN

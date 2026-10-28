@@ -2,9 +2,10 @@ package crap
 
 import (
 	"context"
-	"github.com/Sizolity/archview/internal/model"
 	"strings"
 	"testing"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 const crapJSON = `{

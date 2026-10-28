@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/Sizolity/archview/internal/model"
 	"html"
 	"io"
 	"net/http"
@@ -14,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 // stripTags removes markup so a highlighted page can be compared with the

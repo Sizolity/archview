@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Sizolity/archview/internal/model"
 	"os/exec"
 	"path"
 	"strings"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 // crapReport is the subset of `go-crap scan -f json` the viewer reads. Unknown
@@ -125,7 +126,7 @@ func normalizeFile(f string) string {
 	return path.Clean(f)
 }
 
-// apply attaches metrics to the model in place and reports how many
+// Apply attaches metrics to the model in place and reports how many
 // declarations matched. Declarations go-crap did not report keep no metrics.
 func (b *Bundle) Apply(m *model.Module) int {
 	if b == nil {

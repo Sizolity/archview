@@ -14,12 +14,13 @@ type Watcher struct {
 	subs map[chan struct{}]bool
 }
 
+// NewWatcher returns a watcher with no subscribers.
 func NewWatcher() *Watcher {
 	return &Watcher{subs: map[chan struct{}]bool{}}
 }
 
-// subscribe returns a channel that receives one value per change. The caller
-// must unsubscribe.
+// Subscribe returns a channel that receives one value per change. The caller
+// must Unsubscribe it.
 func (w *Watcher) Subscribe() chan struct{} {
 	ch := make(chan struct{}, 1)
 	w.mu.Lock()
@@ -28,13 +29,14 @@ func (w *Watcher) Subscribe() chan struct{} {
 	return ch
 }
 
+// Unsubscribe stops delivering change events to ch.
 func (w *Watcher) Unsubscribe(ch chan struct{}) {
 	w.mu.Lock()
 	delete(w.subs, ch)
 	w.mu.Unlock()
 }
 
-// notify tells every subscriber the tree moved, without blocking on a slow one.
+// Notify tells every subscriber the tree moved, without blocking on a slow one.
 func (w *Watcher) Notify() {
 	w.mu.Lock()
 	defer w.mu.Unlock()

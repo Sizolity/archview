@@ -2,9 +2,10 @@ package export
 
 import (
 	"fmt"
-	"github.com/Sizolity/archview/internal/model"
 	"sort"
 	"strings"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 // EDN renders the model as the static topology IR uml-viewer reads:

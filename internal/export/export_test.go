@@ -2,10 +2,11 @@ package export
 
 import (
 	"encoding/json"
-	"github.com/Sizolity/archview/internal/assets"
-	"github.com/Sizolity/archview/internal/model"
 	"strings"
 	"testing"
+
+	"github.com/Sizolity/archview/internal/assets"
+	"github.com/Sizolity/archview/internal/model"
 )
 
 func sampleModule() *model.Module {

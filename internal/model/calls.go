@@ -155,8 +155,8 @@ func SplitFuncID(id string) (owner, member string) {
 		return "", id
 	}
 	rest := id[i+1:]
-	if j := strings.Index(rest, "."); j >= 0 {
-		return id[:i+1] + rest[:j], rest[j+1:]
+	if before, after, ok := strings.Cut(rest, "."); ok {
+		return id[:i+1] + before, after
 	}
 	return "", rest
 }

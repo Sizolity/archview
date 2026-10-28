@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Sizolity/archview/internal/config"
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/Sizolity/archview/internal/config"
 )
 
 // hasGoWork reports whether dir is a workspace root.

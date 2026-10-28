@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/Sizolity/archview/internal/model"
 	"strings"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 // dataSentinel marks where a single-file export puts the model. It has to stay

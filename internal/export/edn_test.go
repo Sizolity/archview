@@ -2,10 +2,11 @@ package export
 
 import (
 	"context"
-	"github.com/Sizolity/archview/internal/model"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 func TestExportEDNShape(t *testing.T) {

@@ -4,13 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"github.com/Sizolity/archview/internal/model"
 	"io/fs"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/Sizolity/archview/internal/model"
 )
 
 // Cache keeps the last scan and rebuilds it only when the source tree
@@ -52,7 +53,7 @@ func (c *Cache) Load(ctx context.Context) (*model.Module, error) {
 	return m, nil
 }
 
-// fingerprint is the tree's current sum. The Watcher and Load both use it.
+// Fingerprint is the tree's current sum; Load and the Watcher both use it.
 func (c *Cache) Fingerprint() (string, error) {
 	return treeFingerprint(c.dir)
 }
