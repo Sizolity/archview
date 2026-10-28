@@ -50,6 +50,7 @@ explicitly change it.
 | `-import-edn` | | render an IR instead of scanning code |
 | `-crap-cmd` | `go-crap` | command that produces the CRAP report |
 | `-crap-profile` | | reuse a coverage profile instead of running the tests |
+| `-diff` | | mark what the working tree changed since this git ref |
 | `-no-crap-cache` | `false` | do not reuse the cached CRAP report |
 | `-cache-dir` | user cache dir | where the CRAP report is cached |
 | `-no-crap` | `false` | skip CRAP metrics entirely |
@@ -114,6 +115,23 @@ module: archview reads projects and does not write into them, so there is no
 `.gitignore` entry to add. Relocate it with `-cache-dir` or
 `ARCHVIEW_CACHE_DIR`, and turn it off with `-no-crap-cache`.
 
+### Diff-aware view
+
+```sh
+archview -diff HEAD~1        # what changed since the previous commit
+archview -diff origin/main   # what the branch adds
+```
+
+The working tree (staged and unstaged) is compared with the ref, the changed
+hunks are mapped onto the declarations they fall in, and the model carries a
+`changed` flag per function, method and type plus a `diff` summary. The page
+draws those cards with an orange edge and a dot, badges the inspector, and puts
+"改动 N 文件 / M 函数" in the status line.
+
+Read together with the scores this answers the review question: the cards that
+changed are the ones carrying the new CRAP numbers. If git is missing or the
+directory is not a repository, the loader adds a warning and everything else
+still works.
 ### Single-file export
 
 ```sh

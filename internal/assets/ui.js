@@ -465,6 +465,18 @@
     return Number(v).toFixed(1);
   }
 
+  // typeChanged reports whether the -diff run touched this type or any of its
+  // members.
+  function typeChanged(t) {
+    if (!t) return false;
+    if (t.changed) return true;
+    var methods = t.methods || [];
+    for (var i = 0; i < methods.length; i++) {
+      if (methods[i].changed) return true;
+    }
+    return false;
+  }
+
   // typeCrap is the worst method score: a type is as risky as its worst member.
   function typeCrap(t) {
     var worst = null;
@@ -589,6 +601,7 @@
         folded: p.card.folded,
         sub: p.card.t.kind + " · " + pkg.name,
         crap: typeCrap(p.card.t),
+        changed: typeChanged(p.card.t),
         href: typeHash(p.card.t.id),
         selected: selected === p.card.t.id
       };
@@ -843,6 +856,7 @@
     crapThresholds: crapThresholds,
     formatCrap: formatCrap,
     typeCrap: typeCrap,
+    typeChanged: typeChanged,
     buildScene: buildScene,
     edgePath: edgePath,
     applyMoved: applyMoved,

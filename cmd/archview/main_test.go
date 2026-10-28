@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestLoadModelRecollectsMetrics(t *testing.T) {
 	}
 	cfg := &config.Config{}
 
-	first, err := loadModel(context.Background(), dir, cfg, "source", collect)
+	first, err := loadModel(context.Background(), dir, cfg, "source", collect, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestLoadModelRecollectsMetrics(t *testing.T) {
 		}
 	}
 
-	second, err := loadModel(context.Background(), dir, cfg, "source", recollect)
+	second, err := loadModel(context.Background(), dir, cfg, "source", recollect, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +83,64 @@ func TestLoadModelWithoutMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := loadModel(context.Background(), dir, &config.Config{}, "source", nil)
+	m, err := loadModel(context.Background(), dir, &config.Config{}, "source", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if m.Metrics != nil || len(m.Warnings) != 0 {
 		t.Fatalf("metrics = %+v warnings = %v", m.Metrics, m.Warnings)
+	}
+}
+
+// With -diff the loader marks the declarations the working tree touched, so the
+// page can talk about the change instead of the whole module.
+func TestLoadModelMarksTheDiff(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("go.mod", "module example.com/d\n\ngo 1.22\n")
+	write("a.go", "package d\n\nfunc A() {\n}\n\nfunc B() {\n}\n")
+	git("init", "-q")
+	git("add", ".")
+	git("commit", "-q", "-m", "one")
+
+	// A change inside A's body only.
+	write("a.go", "package d\n\nfunc A() {\n\t_ = 1\n}\n\nfunc B() {\n}\n")
+
+	m, err := loadModel(context.Background(), dir, &config.Config{}, "source", nil, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Diff == nil {
+		t.Fatalf("no diff summary: root=%q warnings=%v", m.Root, m.Warnings)
+	}
+	if m.Diff.Functions != 1 || m.Diff.Files != 1 {
+		t.Fatalf("summary = %+v", m.Diff)
+	}
+	funcs := m.Packages[0].Funcs
+	if len(funcs) != 2 {
+		t.Fatalf("funcs = %d", len(funcs))
+	}
+	if !funcs[0].Changed || funcs[1].Changed {
+		t.Fatalf("A.changed=%v B.changed=%v", funcs[0].Changed, funcs[1].Changed)
 	}
 }

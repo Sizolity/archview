@@ -23,6 +23,7 @@ import (
 	"github.com/Sizolity/archview/internal/cache"
 	"github.com/Sizolity/archview/internal/config"
 	"github.com/Sizolity/archview/internal/crap"
+	"github.com/Sizolity/archview/internal/diff"
 	"github.com/Sizolity/archview/internal/export"
 	"github.com/Sizolity/archview/internal/model"
 	"github.com/Sizolity/archview/internal/web"
@@ -38,12 +39,17 @@ var version = "dev"
 // unmatched if the snapshot were older than the model. collect is nil when the
 // scores are switched off.
 func loadModel(ctx context.Context, dir string, cfg *config.Config, mode string,
-	collect func(context.Context, string) *crap.Bundle) (*model.Module, error) {
+	collect func(context.Context, string) *crap.Bundle, diffRef string) (*model.Module, error) {
 	m, err := model.LoadWith(ctx, dir, cfg)
 	if err != nil {
 		return nil, err
 	}
 	m.Editor = mode
+
+	// The diff goes on before the scores: a failure to read git must not cost
+	// the metrics, and it only costs the change markers when it fails.
+	markDiff(ctx, m, diffRef)
+
 	if collect == nil {
 		return m, nil
 	}
@@ -62,6 +68,24 @@ func loadModel(ctx context.Context, dir string, cfg *config.Config, mode string,
 			"cached", b.Cached, "took", time.Since(started).Round(time.Millisecond))
 	}
 	return m, nil
+}
+
+// markDiff tags the declarations the working tree changed since ref.
+func markDiff(ctx context.Context, m *model.Module, ref string) {
+	if ref == "" || m.Root == "" {
+		return
+	}
+	changes, err := diff.Run(ctx, m.Root, ref)
+	if err != nil {
+		m.Warnings = append(m.Warnings, "改动范围不可用: "+model.OneLine(err.Error()))
+		return
+	}
+	if !diff.Apply(m, changes) {
+		slog.Info("改动范围为空", "ref", ref)
+		return
+	}
+	slog.Info("改动范围已标记", "ref", ref, "files", m.Diff.Files,
+		"functions", m.Diff.Functions, "types", m.Diff.Types)
 }
 
 // defaultCacheDir is where the CRAP report is cached: the user's cache
@@ -90,6 +114,7 @@ func main() {
 	noCrap := flag.Bool("no-crap", false, "跳过 CRAP 指标")
 	configPath := flag.String("config", "", "配置文件路径(默认读当前目录的 "+config.DefaultFile+")")
 	dir := flag.String("dir", "", "扫描目录(默认当前目录;目录里有 go.work 时按工作区扫描)")
+	diffRef := flag.String("diff", "", "把工作区相对该 git 引用的改动标在函数/类型上(如 HEAD、HEAD~1)")
 	watch := flag.Bool("watch", false, "轮询源码变化,通过 SSE 通知页面自动重载")
 	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
@@ -150,7 +175,7 @@ func main() {
 	// tree as the model, so the cache can hand the result to every request
 	// without anyone mutating it.
 	loadFn := func(c context.Context, dir string) (*model.Module, error) {
-		return loadModel(c, dir, cfg, mode, collect)
+		return loadModel(c, dir, cfg, mode, collect, *diffRef)
 	}
 
 	var m *model.Module

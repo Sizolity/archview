@@ -940,3 +940,12 @@ test("withFrom puts the current route on a source link", () => {
   assert.equal(ui.withFrom("", "#/"), "");
 });
 
+
+// ---------- diff markers ----------
+
+test("typeChanged marks a type touched by the diff", () => {
+  assert.equal(ui.typeChanged({ changed: true }), true);
+  assert.equal(ui.typeChanged({ methods: [{ changed: true }] }), true);
+  assert.equal(ui.typeChanged({ methods: [{ changed: false }] }), false);
+  assert.equal(ui.typeChanged(undefined), false);
+});

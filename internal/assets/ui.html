@@ -72,6 +72,7 @@
   }
   .badge.iface { background: #fef3c7; color: #b45309; }
   .badge.type { background: #dcfce7; color: #166534; }
+  .badge.diff { background: #ffedd5; color: #c2410c; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { background: var(--code); color: #334155; border-radius: 999px; padding: 2px 9px; font-size: 12px; }
   .pkg-list { list-style: none; margin: 10px 0 0; padding: 0; }
@@ -258,6 +259,11 @@
       types += vis(p.types).length; funcs += vis(p.funcs).length;
     });
     statusEl.textContent = state.model.packages.length + " 包 · " + types + " 类型 · " + funcs + " 函数";
+    if (state.model.diff) {
+      var d = state.model.diff;
+      statusEl.textContent += " · 改动 " + d.files + " 文件 / " + d.functions + " 函数";
+      statusEl.title = "相对 " + d.ref + " 的工作区改动";
+    }
     var legend = document.getElementById("legend");
     legend.hidden = !state.model.metrics;
     if (state.model.metrics) {
@@ -351,12 +357,20 @@
       });
       var fill = n.kind === "pkg" ? "#e0e7ff" : (n.sub === "interface" ? "#fef3c7" : "#dbeafe");
       var stroke = n.kind === "pkg" ? "#6366f1" : (n.sub === "interface" ? "#d97706" : "#3b82f6");
+      if (n.changed) {
+        // -diff marked this type: give it the accent and a dot, so the change
+        // stands out without hiding everything else.
+        stroke = "#ea580c";
+      }
       g.appendChild(el("rect", {
         x: n.x, y: n.y, width: n.w, height: n.h, rx: 9,
         fill: fill, stroke: stroke, class: "box"
       }));
       var title = el("text", { x: n.x + 12, y: n.y + 20, class: "title" }, cut(n.title, 26));
       g.appendChild(title);
+      if (n.changed) {
+        g.appendChild(el("circle", { cx: n.x + 6, cy: n.y + 6, r: 4, fill: "#ea580c", class: "changed-dot" }));
+      }
       if (n.kind === "type") {
         g.appendChild(el("text", { x: n.x + 12, y: n.y + 34, class: "kind" }, n.sub));
       } else {
@@ -530,7 +544,11 @@
 
   function renderType(t) {
     var html = "<h2>" + esc(t.name) + ' <span class="badge ' +
-      (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></h2>";
+      (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span>";
+    if (t.changed || (t.methods || []).some(function (m) { return m.changed; })) {
+      html += ' <span class="badge diff">改动</span>';
+    }
+    html += "</h2>";
     html += '<div class="meta">' + esc(rel(t.pkg.path)) + " · " + esc(t.pos) +
       (state.model.metrics ? " " + crapChip(A.typeCrap(t)) : "") + "</div>";
     if (t.doc) html += '<p class="doc">' + esc(t.doc) + "</p>";

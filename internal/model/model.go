@@ -33,6 +33,7 @@ type Module struct {
 	Editor   string          `json:"editor,omitempty"`
 	Layers   [][]string      `json:"layers,omitempty"`
 	Metrics  *MetricsSummary `json:"metrics,omitempty"`
+	Diff     *DiffSummary    `json:"diff,omitempty"`
 	Packages []*Package      `json:"packages"`
 	Edges    []Edge          `json:"edges,omitempty"`
 	Calls    []Call          `json:"calls,omitempty"`
@@ -58,9 +59,20 @@ type TypeInfo struct {
 	Kind     string       `json:"kind"`
 	Doc      string       `json:"doc,omitempty"`
 	Pos      string       `json:"pos"`
+	End      int          `json:"end,omitempty"`
 	Exported bool         `json:"exported"`
 	Fields   []FieldInfo  `json:"fields,omitempty"`
 	Methods  []MethodInfo `json:"methods,omitempty"`
+	Changed  bool         `json:"changed,omitempty"`
+}
+
+// DiffSummary says what a -diff run found: which git ref the working tree was
+// compared against and how many declarations the changes touch.
+type DiffSummary struct {
+	Ref       string `json:"ref"`
+	Files     int    `json:"files"`
+	Functions int    `json:"functions"`
+	Types     int    `json:"types"`
 }
 
 // FieldInfo is a struct member. Embedded fields carry the type as Name.
@@ -81,9 +93,11 @@ type MethodInfo struct {
 	Sig      string   `json:"sig"`
 	Doc      string   `json:"doc,omitempty"`
 	Pos      string   `json:"pos"`
+	End      int      `json:"end,omitempty"`
 	Exported bool     `json:"exported"`
 	Refs     []string `json:"refs,omitempty"`
 	Metrics  *Metrics `json:"metrics,omitempty"`
+	Changed  bool     `json:"changed,omitempty"`
 	raw      *ast.FuncType
 }
 
@@ -94,9 +108,11 @@ type FuncInfo struct {
 	Sig      string   `json:"sig"`
 	Doc      string   `json:"doc,omitempty"`
 	Pos      string   `json:"pos"`
+	End      int      `json:"end,omitempty"`
 	Exported bool     `json:"exported"`
 	Refs     []string `json:"refs,omitempty"`
 	Metrics  *Metrics `json:"metrics,omitempty"`
+	Changed  bool     `json:"changed,omitempty"`
 	raw      *ast.FuncType
 }
 
@@ -385,6 +401,7 @@ func (b *builder) parseFile(f *ast.File) {
 						Kind:     kindOf(ts.Type),
 						Doc:      firstPara(commentText(firstNonNil(ts.Doc, dd.Doc))),
 						Pos:      b.pos(ts.Pos()),
+						End:      b.line(ts.End()),
 						Exported: ts.Name.IsExported(),
 					}
 					if st, ok := ts.Type.(*ast.StructType); ok {
@@ -445,6 +462,7 @@ func (b *builder) parseFile(f *ast.File) {
 					Sig:      funcSig(dd.Type),
 					Doc:      firstPara(commentText(dd.Doc)),
 					Pos:      b.pos(dd.Pos()),
+					End:      b.line(dd.End()),
 					Exported: dd.Name.IsExported(),
 					raw:      dd.Type,
 				})
@@ -456,6 +474,7 @@ func (b *builder) parseFile(f *ast.File) {
 				Sig:      funcSig(dd.Type),
 				Doc:      firstPara(commentText(dd.Doc)),
 				Pos:      b.pos(dd.Pos()),
+				End:      b.line(dd.End()),
 				Exported: dd.Name.IsExported(),
 				raw:      dd.Type,
 			})
@@ -470,6 +489,12 @@ func (b *builder) pos(p token.Pos) string {
 		rel = pos.Filename
 	}
 	return fmt.Sprintf("%s:%d", filepath.ToSlash(rel), pos.Line)
+}
+
+// line is the last line of a declaration, so a diff range can be matched
+// against the whole body, not just its first line.
+func (b *builder) line(p token.Pos) int {
+	return b.fset.Position(p).Line
 }
 
 func kindOf(e ast.Expr) string {
