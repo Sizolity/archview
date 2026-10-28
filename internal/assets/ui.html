@@ -462,9 +462,9 @@
       }
       g.addEventListener("mousedown", function (ev) {
         ev.stopPropagation();
-        ev.preventDefault();
+        // Dragging cards is off: it fought with clicking and the positions were
+        // never reapplied after a re-render anyway. The canvas still pans.
         state.suppressClick = false;
-        nodeDrag = { id: n.id, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false };
       });
       g.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -835,7 +835,7 @@
     var hint = document.getElementById("hint");
     hint.textContent =
       (state.focus && isType ? "已聚焦：只显示一跳邻居 · Esc 退出 · " : "") +
-      "拖拽平移 · 滚轮缩放 · 点击方框下钻 · 拖动卡片可摆放" +
+      "拖拽平移 · 滚轮缩放 · 点击方框下钻 · 双击查看源码" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
       " · 箭头指向被依赖方 · ▾ 折叠成员";
@@ -857,7 +857,13 @@
       // reapplied on the next render (editing code, switching filters).
       var dx = (e.clientX - nodeDrag.sx) / state.k;
       var dy = (e.clientY - nodeDrag.sy) / state.k;
-      if (Math.abs(dx) + Math.abs(dy) > 6) nodeDrag.moved = true;
+      // A shaky click must not turn into a drag: moving and redrawing below the
+      // threshold would replace the card's DOM before the click is dispatched,
+      // and the click would then land on the svg instead.
+      if (!nodeDrag.moved) {
+        if (Math.abs(dx) + Math.abs(dy) <= 6) return;
+        nodeDrag.moved = true;
+      }
       var pos = { x: nodeDrag.ox + dx, y: nodeDrag.oy + dy };
       state.moved[nodeDrag.id] = pos;
       state.scene.nodes.forEach(function (n) {
