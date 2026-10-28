@@ -1009,6 +1009,7 @@ test("a package of variables gets value cards and a count", () => {
       consts: [],
       vars: [
         { name: "UI", type: "[]byte", exported: true },
+        { name: "Limit", type: "int", value: "2", exported: true },
         { name: "JS", type: "[]byte", exported: true },
         { name: "CSS", type: "[]byte", exported: true }
       ]
@@ -1018,12 +1019,18 @@ test("a package of variables gets value cards and a count", () => {
 
   const pkgScene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/v" }, false);
   const values = pkgScene.nodes.filter((n) => n.kind === "value");
-  assert.deepEqual(values.map((n) => n.title).sort(), ["CSS", "JS", "UI"]);
-  assert.ok(values.every((n) => n.sub.indexOf("[]byte") >= 0), JSON.stringify(values.map((n) => n.sub)));
+  assert.deepEqual(values.map((n) => n.title).sort(), ["CSS", "JS", "Limit", "UI"]);
+  assert.ok(values.filter((n) => n.title !== "Limit").every((n) => n.sub.indexOf("[]byte") >= 0),
+    JSON.stringify(values.map((n) => n.sub)));
   // Every card must have finite coordinates: NaN draws an invisible card.
   assert.ok(values.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y) && Number.isFinite(n.w) && Number.isFinite(n.h)),
     JSON.stringify(values.map((n) => [n.x, n.y, n.w, n.h])));
 
   const home = ui.buildScene(model, idx, { view: "home" }, false);
-  assert.ok(home.nodes[0].lines[0].indexOf("3 变量") >= 0, home.nodes[0].lines[0]);
+  assert.ok(home.nodes[0].lines[0].indexOf("4 变量") >= 0, home.nodes[0].lines[0]);
+});
+test("value cards show the initialiser", () => {
+  assert.equal(ui.valueSub({ type: "[]byte" }), "var []byte");
+  assert.equal(ui.valueSub({ type: "int", value: "2" }), "var int = 2");
+  assert.equal(ui.valueSub({ kind: "const", value: "3" }), "const = 3");
 });

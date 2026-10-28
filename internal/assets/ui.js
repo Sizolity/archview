@@ -470,6 +470,15 @@
     return Number(v).toFixed(1);
   }
 
+  // valueSub is the second line of a value card: the kind, the type and the
+  // initialiser when the source gives one.
+  function valueSub(v) {
+    var parts = [v.kind || "var"];
+    if (v.type) parts.push(v.type);
+    if (v.value) parts.push("= " + v.value);
+    return parts.join(" ");
+  }
+
   // valuesOf lists a package's constants and variables in one slice.
   function valuesOf(p) {
     if (!p) return [];
@@ -692,7 +701,7 @@
           w: CARD_W,
           h: 60,
           title: v.name,
-          sub: (v.kind || "var") + " " + (v.type || ""),
+          sub: valueSub(v),
           pos: v.pos,
           changed: !!v.changed,
           href: pkgHash(pkg.path),
@@ -956,6 +965,7 @@
     packageChanged: packageChanged,
     showsAll: showsAll,
     valuesOf: valuesOf,
+    valueSub: valueSub,
     buildScene: buildScene,
     edgePath: edgePath,
     applyMoved: applyMoved,
