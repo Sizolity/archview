@@ -405,6 +405,7 @@
             (p.main ? " · 程序入口" : "")],
           changed: packageChanged(p),
           entry: !!p.main,
+          crap: packageCrap(p),
           href: pkgHash(p.path),
           selected: false
         });
@@ -540,6 +541,19 @@
     return !!all || !!(p && p.main);
   }
 
+  // packageCrap is the worst score in the package, the same rule the type cards
+  // use: a package is as risky as its riskiest function.
+  function packageCrap(p) {
+    var worst = null;
+    (p.funcs || []).forEach(function (f) {
+      if (f.metrics && (worst == null || f.metrics.crap > worst)) worst = f.metrics.crap;
+    });
+    (p.types || []).forEach(function (t) {
+      var v = typeCrap(t);
+      if (v != null && (worst == null || v > worst)) worst = v;
+    });
+    return worst;
+  }
   // packageChanged reports whether the -diff run touched anything inside the
   // package, so the module view can point at the packages that moved.
   function packageChanged(p) {
@@ -1033,6 +1047,7 @@
     typeChanged: typeChanged,
     warningSummary: warningSummary,
     packageChanged: packageChanged,
+    packageCrap: packageCrap,
     showsAll: showsAll,
     valuesOf: valuesOf,
     valueSub: valueSub,

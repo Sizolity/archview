@@ -481,14 +481,16 @@
         }, "入口"));
       }
       if (n.crap != null) {
-        // CRAP badge: a type is as risky as its worst method (2.3).
+        // CRAP badge: a type is as risky as its worst method (2.3), a package as
+        // risky as its worst declaration. Leave room for the entry badge.
         var lvl = A.crapLevel(n.crap, A.crapThresholds(state.model));
+        var bx = n.x + n.w - (n.kind === "pkg" && n.entry ? 110 : 54);
         g.appendChild(el("rect", {
-          x: n.x + n.w - 54, y: n.y + 7, width: 46, height: 17, rx: 8,
+          x: bx, y: n.y + 7, width: 46, height: 17, rx: 8,
           fill: CRAP_FILL[lvl], class: "crap-badge"
         }));
         g.appendChild(el("text", {
-          x: n.x + n.w - 31, y: n.y + 19.5, class: "crap-text", fill: CRAP_INK[lvl], "text-anchor": "middle"
+          x: bx + 23, y: n.y + 19.5, class: "crap-text", fill: CRAP_INK[lvl], "text-anchor": "middle"
         }, A.formatCrap(n.crap)));
       }
       if (n.kind === "type") {

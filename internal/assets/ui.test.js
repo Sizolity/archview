@@ -1108,3 +1108,12 @@ test("type cards prefer the declaration source, functions prefer the doc", () =>
   assert.equal(ui.docLine(""), "");
   assert.deepEqual(ui.textRows("type T struct {\n\tA int\n}"), ["type T struct {", "  A int", "}"]);
 });
+test("package cards carry the worst CRAP in the package", () => {
+  const model = fixture();
+  model.packages[0].funcs = [{ name: "New", sig: "()", metrics: { crap: 12 } }];
+  model.packages[0].types[1].methods = [{ name: "Start", sig: "() error", metrics: { crap: 40 } }];
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "home" }, false);
+  const card = scene.nodes.find((n) => n.title === "app");
+  assert.equal(card.crap, 40);
+});
