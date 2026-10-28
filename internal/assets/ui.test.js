@@ -962,3 +962,10 @@ test("warningSummary folds warnings into one line", () => {
   assert.equal(many.all, "a\nb");
   assert.ok(ui.warningSummary({ warnings: ["x".repeat(200)] }).text.length <= 120);
 });
+test("packageChanged sees a change anywhere in the package", () => {
+  assert.equal(ui.packageChanged({ types: [{ changed: true }] }), true);
+  assert.equal(ui.packageChanged({ types: [{ methods: [{ changed: true }] }] }), true);
+  assert.equal(ui.packageChanged({ funcs: [{ changed: true }] }), true);
+  assert.equal(ui.packageChanged({ types: [{}], funcs: [{}] }), false);
+  assert.equal(ui.packageChanged(null), false);
+});

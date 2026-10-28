@@ -365,6 +365,7 @@
           title: short(p.path),
           sub: relPath(modelPath, p.path),
           lines: [visible(p.types, all).length + " 类型 · " + visible(p.funcs, all).length + " 函数"],
+          changed: packageChanged(p),
           href: pkgHash(p.path),
           selected: false
         });
@@ -463,6 +464,21 @@
   function formatCrap(v) {
     if (v == null || !isFinite(v)) return "";
     return Number(v).toFixed(1);
+  }
+
+  // packageChanged reports whether the -diff run touched anything inside the
+  // package, so the module view can point at the packages that moved.
+  function packageChanged(p) {
+    if (!p) return false;
+    var types = p.types || [];
+    for (var i = 0; i < types.length; i++) {
+      if (typeChanged(types[i])) return true;
+    }
+    var funcs = p.funcs || [];
+    for (var j = 0; j < funcs.length; j++) {
+      if (funcs[j].changed) return true;
+    }
+    return false;
   }
 
   // warningSummary folds the model's warnings into one banner-sized line. They
@@ -868,6 +884,7 @@
     typeCrap: typeCrap,
     typeChanged: typeChanged,
     warningSummary: warningSummary,
+    packageChanged: packageChanged,
     buildScene: buildScene,
     edgePath: edgePath,
     applyMoved: applyMoved,
