@@ -156,7 +156,7 @@
     <button id="focus" type="button" title="只显示选中类型的一跳邻居（Esc 退出）">聚焦</button>
     <button id="fit" type="button">适应</button>
     <button id="reload" type="button">重载</button>
-    <span id="legend" class="legend" hidden>CRAP <b class="ok">≤5</b> <b class="warn">≤30</b> <b class="bad">&gt;30</b></span>
+    <span id="legend" class="legend" hidden>CRAP 低 <b class="ok">≤5</b> · 中 <b class="warn">≤30</b> · 高 <b class="bad">&gt;30</b></span>
     <span id="status"></span>
   </div>
 </header>
@@ -291,8 +291,9 @@
     legend.hidden = !state.model.metrics;
     if (state.model.metrics) {
       var t = A.crapThresholds(state.model);
-      legend.innerHTML = "CRAP <b class=\"ok\">≤" + t[0] + "</b> <b class=\"warn\">≤" + t[1] +
-        "</b> <b class=\"bad\">&gt;" + t[1] + "</b>";
+      legend.innerHTML = "CRAP 低 <b class=\"ok\">≤" + t[0] + "</b> · 中 <b class=\"warn\">≤" + t[1] +
+        "</b> · 高 <b class=\"bad\">&gt;" + t[1] + "</b>";
+      legend.title = "类型按其最差方法的 CRAP 着色;阈值可在 archview.json 的 metrics.thresholds 里改";
     }
   }
 

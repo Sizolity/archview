@@ -6,6 +6,37 @@ Notable changes, newest first. The format follows
 [RELEASING.md](RELEASING.md). A tag without a section here fails the release
 workflow.
 
+## Unreleased
+
+## [0.4.0] - 2026-10-29
+
+### Added
+
+- The package view draws package-level functions and, in a second band, the
+  constants and variables: an embed package or a command no longer opens on an
+  empty canvas. Values show their initialiser (`const = "archview.json"`).
+- Double-clicking a type, function or value card opens its source page at the
+  declaration, with the back link returning to the view you left. A static
+  export falls back to `file://`, an imported IR has no source to open.
+- The module card counts constants and variables, and packages that contain
+  changes are marked in the module view.
+
+### Fixed
+
+- Value cards in a package without functions got `y = NaN`: the band base was
+  computed inside the functions-only branch, so the browser drew an empty card.
+- The toolbar squeezed instead of scrolling: the breadcrumb wrapped one
+  character per line and the buttons stacked. It is a fixed 56px row again and
+  scrolls sideways when it does not fit.
+
+### Changed
+
+- `main` is now `run` plus a three-line entry point: the command returns errors
+  (exit status 2 still means a bad config) and its assembly is split into
+  `parseFlags`, `makeCollector`, `loadInput`, `writeOutputs` and `serve`. CRAP
+  for `main` fell from 1190 to 12, and nothing in the module exceeds 30 now.
+- The EDN importer is split into `readPackage`, `readClass`, `readFields`,
+  `readOps` and `readEdges`, so a malformed part is counted where it is found.
 ## [0.3.0] - 2026-10-28
 
 ### Added
