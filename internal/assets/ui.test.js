@@ -532,99 +532,6 @@ test("layoutTypes folds a card down to its title", () => {
   assert.ok(folded.h < open.h, `folded ${folded.h} should be shorter than ${open.h}`);
 });
 
-test("declutter folds every card", () => {
-  const types = [
-    { id: "a", name: "A", kind: "struct", exported: true, fields: [{ name: "f", type: "int", exported: true }], methods: [] },
-    { id: "b", name: "B", kind: "struct", exported: true, fields: [], methods: [] }
-  ];
-  const nodes = ui.layoutTypes({ name: "p" }, types, { all: true, declutter: true });
-  assert.ok(nodes.every((n) => n.folded && n.rows.length === 0));
-});
-
-test("focusScene keeps one node plus its one-hop neighbours", () => {
-  const scene = {
-    kind: "types",
-    key: "k",
-    selected: "b",
-    pkg: {},
-    nodes: [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }],
-    edges: [
-      { from: "a", to: "b" },
-      { from: "b", to: "c" }
-    ]
-  };
-  const focused = ui.focusScene(scene, "b");
-  assert.deepEqual(focused.nodes.map((n) => n.id).sort(), ["a", "b", "c"]);
-  assert.equal(focused.edges.length, 2);
-  assert.equal(focused.key, "k:focus:b");
-
-  const lonely = ui.focusScene(scene, "d");
-  assert.deepEqual(lonely.nodes.map((n) => n.id), ["d"]);
-  assert.deepEqual(lonely.edges, []);
-});
-
-test("declutterScene hides edges that miss the selection", () => {
-  const scene = {
-    kind: "types",
-    key: "k",
-    selected: "a",
-    nodes: [],
-    edges: [
-      { from: "a", to: "b" },
-      { from: "c", to: "d" }
-    ]
-  };
-  assert.deepEqual(ui.declutterScene(scene, "a").edges, [{ from: "a", to: "b" }]);
-  assert.equal(ui.declutterScene(scene, null).edges.length, 2, "no selection hides nothing");
-});
-
-test("buildScene applies the 3.2 view filters", () => {
-  const t = (name, refs) => ({
-    id: "example.com/app#" + name,
-    name: name,
-    kind: "struct",
-    exported: true,
-    fields: refs.map((r, i) => ({ name: "f" + i, type: r, exported: true, refs: ["example.com/app#" + r] })),
-    methods: []
-  });
-  const model = {
-    path: "example.com/app",
-    packages: [
-      {
-        path: "example.com/app",
-        name: "app",
-        imports: [],
-        types: [t("A", ["B"]), t("B", ["C"]), t("C", []), t("D", [])],
-        funcs: []
-      }
-    ]
-  };
-  const idx = ui.indexModel(model);
-  const route = { view: "type", id: "example.com/app#B" };
-
-  const plain = ui.buildScene(model, idx, route, false);
-  assert.equal(plain.nodes.length, 4);
-  assert.equal(plain.edges.length, 2);
-
-  const focused = ui.buildScene(model, idx, route, false, { focus: "example.com/app#B" });
-  assert.equal(focused.nodes.length, 3, "one node plus its two neighbours");
-  assert.deepEqual(focused.nodes.map((n) => n.id).sort(), [
-    "example.com/app#A",
-    "example.com/app#B",
-    "example.com/app#C"
-  ]);
-
-  const lonely = ui.buildScene(model, idx, route, false, { focus: "example.com/app#D" });
-  assert.deepEqual(lonely.nodes.map((n) => n.id), ["example.com/app#D"]);
-  assert.deepEqual(lonely.edges, []);
-
-  const decluttered = ui.buildScene(model, idx, route, false, { declutter: true });
-  assert.ok(decluttered.nodes.every((n) => n.folded));
-
-  // The model itself is untouched by any of it.
-  assert.equal(model.packages[0].types.length, 4);
-});
-
 // ---------- 3.1 layered layout ----------
 
 const mkType = (name, kind) => ({
@@ -838,6 +745,79 @@ test("calls to functions outside the visible types draw nothing", () => {
   const idx = ui.indexModel(model);
   const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false, { calls: true });
   assert.equal(scene.edges.filter((e) => e.call).length, 0);
+});
+
+test("package view keeps only intra-package calls at card level", () => {
+  const model = callModel([
+    { from: "example.com/app#New", to: "example.com/app#build" },
+    { from: "example.com/app#A.Run", to: "example.com/app#B.Serve", dynamic: true },
+    // A method calling another method of its own type collapses onto one card.
+    { from: "example.com/app#A.Run", to: "example.com/app#A.Stop" },
+    // Calls leaving or entering the package are not part of this view.
+    { from: "example.com/app#New", to: "example.com/other#X" },
+    { from: "example.com/other#X", to: "example.com/app#New" }
+  ]);
+  model.packages[0].funcs = [
+    { id: "example.com/app#New", name: "New", sig: "()", exported: true },
+    { id: "example.com/app#build", name: "build", sig: "()", exported: false }
+  ];
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, true, { calls: true });
+
+  const calls = scene.edges
+    .filter((e) => e.call)
+    .map((e) => e.from + ">" + e.to + ":" + (e.dynamic ? "dynamic" : "static"))
+    .sort();
+  assert.deepEqual(calls, [
+    "example.com/app#A>example.com/app#B:dynamic",
+    "example.com/app#New>example.com/app#build:static"
+  ]);
+});
+
+test("home view adds callOnly edges only in a direction without an import", () => {
+  const model = {
+    path: "example.com/app",
+    packages: [
+      { path: "example.com/app/a", name: "a", imports: ["example.com/app/b"], types: [], funcs: [] },
+      { path: "example.com/app/b", name: "b", imports: [], types: [], funcs: [] },
+      { path: "example.com/app/c", name: "c", imports: [], types: [], funcs: [] }
+    ],
+    calls: [
+      // a imports b, so this direction is already visible as an import.
+      { from: "example.com/app/a#A", to: "example.com/app/b#B" },
+      // The reverse direction has no import: this is the hidden coupling.
+      { from: "example.com/app/b#B", to: "example.com/app/a#A" },
+      // Duplicates and a second import-free pair still draw one edge each.
+      { from: "example.com/app/a#A", to: "example.com/app/c#C" },
+      { from: "example.com/app/a#A", to: "example.com/app/c#C" }
+    ]
+  };
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "home" }, false);
+
+  const callOnly = scene.edges.filter((e) => e.callOnly).map((e) => e.from + ">" + e.to).sort();
+  assert.deepEqual(callOnly, [
+    "example.com/app/a>example.com/app/c",
+    "example.com/app/b>example.com/app/a"
+  ]);
+  // Only the one real import remains an import edge.
+  assert.deepEqual(scene.edges.filter((e) => !e.callOnly).map((e) => e.from + ">" + e.to),
+    ["example.com/app/a>example.com/app/b"]);
+});
+
+test("buildScene still works without the removed declutter and focus options", () => {
+  const model = fixture();
+  const idx = ui.indexModel(model);
+  const route = { view: "type", id: "example.com/app#Server" };
+  const plain = ui.buildScene(model, idx, route, false);
+  const legacy = ui.buildScene(model, idx, route, false, {
+    focus: "example.com/app#Server",
+    declutter: true
+  });
+
+  assert.deepEqual(legacy, plain);
+  assert.equal(ui.focusScene, undefined);
+  assert.equal(ui.declutterScene, undefined);
 });
 
 // ---------- 3.3 search ----------

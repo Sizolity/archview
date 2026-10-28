@@ -43,7 +43,6 @@
     background: var(--panel); color: #334155; font: inherit; cursor: pointer;
   }
   .tools button:hover { border-color: #bfdbfe; background: var(--soft); }
-  .tools button.on { border-color: #bfdbfe; background: var(--soft); color: var(--accent); }
   .tools select {
     flex: 0 0 auto; white-space: nowrap;
     padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
@@ -121,6 +120,7 @@
   .edge.violation { stroke: #dc2626; stroke-width: 1.9; }
   .edge.call { stroke: #0891b2; }
   .edge.call.dynamic { stroke-dasharray: 3 3; }
+  .edge.callonly { stroke: #0d9488; stroke-dasharray: 6 3; }
   .edge.impl { stroke: #16a34a; }
   .edge.hl { stroke-width: 2.6; }
   .edge.faded { opacity: .18; }
@@ -168,13 +168,11 @@
   <div class="tools">
     <input id="q" type="search" placeholder="搜索类型 / 函数…（/）" autocomplete="off">
     <label class="check"><input id="all" type="checkbox"> 含未导出</label>
-    <label class="check"><input id="declutter" type="checkbox"> 精简</label>
     <label class="check"><input id="calls" type="checkbox"> 调用边</label>
     <select id="layout" title="布局方式">
       <option value="layer">依赖分层</option>
       <option value="kind">按类型分组</option>
     </select>
-    <button id="focus" type="button" title="只显示选中类型的一跳邻居（Esc 退出）">聚焦</button>
     <button id="fit" type="button">适应</button>
     <button id="reload" type="button">重载</button>
     <span id="legend" class="legend" hidden>CRAP 低 <b class="ok">≤5</b> · 中 <b class="warn">≤30</b> · 高 <b class="bad">&gt;30</b></span>
@@ -201,6 +199,7 @@
         <span class="ln" style="border-top-color:#2563eb" title="嵌入"></span><small>embeds</small>
         <span class="ln" style="border-top-color:#0891b2" title="静态调用;虚线为接口调用"></span><small>调用</small>
         <span class="ln" style="border-top-color:#dc2626;border-top-width:3px" title="分层违规:下层依赖上层"></span><small>违规</small></div>
+      <div><b>跨包</b> <span class="ln" style="border-top-color:#0d9488;border-top-style:dashed" title="跨包调用,且两包之间没有同向 import"></span><small>跨包调用(无 import)</small></div>
     </div>  </section>
   <aside id="side"></aside>
 </main>
@@ -262,7 +261,7 @@
 
   var state = {
     model: null, all: false, q: "", route: { view: "home" }, sel: "",
-    focus: false, collapsed: [], expanded: [], declutter: false, layout: "layer", calls: false,
+    collapsed: [], expanded: [], layout: "layer", calls: false,
     moved: {}, suppressClick: false,
     hits: [], hitIndex: 0,
     tx: 0, ty: 0, k: 1, sceneKey: "", scene: null
@@ -352,11 +351,13 @@
     { id: "arrow-impl", fill: "#16a34a" },
     { id: "arrow-emb", fill: "#2563eb" },
     { id: "arrow-call", fill: "#0891b2" },
+    { id: "arrow-callonly", fill: "#0d9488" },
     { id: "arrow-violation", fill: "#dc2626" }
   ];
 
   function markerFor(e) {
     if (e.violation) return "arrow-violation";
+    if (e.callOnly) return "arrow-callonly";
     if (e.call) return "arrow-call";
     if (e.kind === "implements") return "arrow-impl";
     if (e.kind === "embeds") return "arrow-emb";
@@ -371,6 +372,7 @@
     if (e.ref) cls += " ref";
     if (e.kind === "implements") cls += " impl";
     if (e.kind === "embeds") cls += " emb";
+    if (e.callOnly) cls += " callonly";
     if (e.call) cls += " call" + (e.dynamic ? " dynamic" : "");
     if (e.violation) cls += " violation";
     return cls;
@@ -419,8 +421,9 @@
       edgeEls.push({ el: p, from: e.from, to: e.to, cls: cls });
       if (!e.ref) {
         // A native tooltip: the arrow leaves the dependent and points at the
-        // thing it depends on.
-        p.appendChild(el("title", {}, (e.violation ? "违规依赖: " : "") + e.from + " → " + e.to));
+        // thing it depends on. A callOnly edge names the absent import.
+        var lead = e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : "");
+        p.appendChild(el("title", {}, lead + e.from + " → " + e.to));
       }
       world.appendChild(p);
     });
@@ -903,14 +906,10 @@
   function render() {
     if (!state.model) return;
     state.route = A.parseHash(location.hash);
-    var isType = state.route.view === "type";
-    if (!isType) state.focus = false; // focus only means something for a type
     renderCrumb();
     var scene = A.buildScene(state.model, idx, state.route, state.all, {
-      focus: state.focus ? state.route.id : "",
       collapsed: state.collapsed,
       expanded: state.expanded,
-      declutter: state.declutter,
       layout: state.layout,
       calls: state.calls,
       query: state.q,
@@ -930,17 +929,10 @@
     }
   }
 
-  // updateChrome reflects view state (3.2) in the toolbar and the hint line.
+  // updateChrome keeps the hint line in sync with the view state.
   function updateChrome() {
-    var focusBtn = document.getElementById("focus");
-    focusBtn.disabled = state.route.view !== "type";
-    if (state.focus) focusBtn.classList.add("on");
-    else focusBtn.classList.remove("on");
-
-    var isType = state.route.view === "type";
     var hint = document.getElementById("hint");
     hint.textContent =
-      (state.focus && isType ? "已聚焦：只显示一跳邻居 · Esc 退出 · " : "") +
       "拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
@@ -1019,16 +1011,6 @@
 
   document.getElementById("fit").addEventListener("click", function () { fit(state.scene); });
   document.getElementById("reload").addEventListener("click", function () { boot(); });
-  document.getElementById("focus").addEventListener("click", function () {
-    state.focus = !state.focus;
-    state.sceneKey = "";
-    render();
-  });
-  document.getElementById("declutter").addEventListener("change", function (e) {
-    state.declutter = e.target.checked;
-    state.sceneKey = "";
-    render();
-  });
   document.getElementById("layout").addEventListener("change", function (e) {
     state.layout = e.target.value;
     state.moved = {}; // hand-placed cards belong to the layout they were placed in
@@ -1061,11 +1043,6 @@
     if (e.key === "Escape" && document.activeElement === qEl) {
       qEl.value = ""; state.q = ""; state.hits = []; qEl.blur(); render();
       return;
-    }
-    if (e.key === "Escape" && state.focus) {
-      state.focus = false;
-      state.sceneKey = "";
-      render();
     }
   });
   window.addEventListener("hashchange", function () {

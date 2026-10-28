@@ -541,44 +541,6 @@
     return out;
   }
 
-  // focusScene keeps the selected node and its one-hop neighbours. Nodes and
-  // edges are hidden, never removed from the model.
-  function focusScene(scene, id) {
-    if (!scene || !id || scene.kind !== "types") return scene;
-    var keep = {};
-    keep[id] = true;
-    (scene.edges || []).forEach(function (e) {
-      if (e.from === id) keep[e.to] = true;
-      if (e.to === id) keep[e.from] = true;
-    });
-    var nodes = scene.nodes.filter(function (n) { return !!keep[n.id]; });
-    var present = {};
-    nodes.forEach(function (n) { present[n.id] = true; });
-    return {
-      kind: scene.kind,
-      key: scene.key + ":focus:" + id,
-      nodes: nodes,
-      edges: (scene.edges || []).filter(function (e) { return present[e.from] && present[e.to]; }),
-      pkg: scene.pkg,
-      selected: scene.selected
-    };
-  }
-
-  // declutterScene hides edges that do not touch the selected node.
-  function declutterScene(scene, selected) {
-    if (!scene || scene.kind !== "types" || !selected) return scene;
-    return {
-      kind: scene.kind,
-      key: scene.key,
-      nodes: scene.nodes,
-      edges: (scene.edges || []).filter(function (e) {
-        return e.from === selected || e.to === selected;
-      }),
-      pkg: scene.pkg,
-      selected: scene.selected
-    };
-  }
-
   // ---------- metrics ----------
 
   // Bands follow go-crap's default threshold of 30; 5 is where a function is
@@ -736,7 +698,6 @@
     var selected = opts.selected || null;
     var collapsed = opts.collapsed || [];
     var expanded = opts.expanded || [];
-    var declutter = !!opts.declutter;
     var mode = layoutMode(opts.layout);
     var edges = opts.edges || [];
     var cardOpts = { all: all, selected: selected, editor: opts.editor, root: opts.root };
@@ -745,7 +706,7 @@
       return typeCard(t, pkg, {
         all: all,
         selected: selected,
-        folded: declutter || collapsed.indexOf(t.id) >= 0,
+        folded: collapsed.indexOf(t.id) >= 0,
         expanded: expanded.indexOf(t.id) >= 0,
         editor: opts.editor,
         root: opts.root
@@ -854,14 +815,55 @@
 
   // ---------- scene ----------
 
+  // funcIDPkg is the package half of a function ID: "pkg#Type.M" -> "pkg".
+  function funcIDPkg(id) {
+    var s = String(id || "");
+    var i = s.lastIndexOf("#");
+    return i > 0 ? s.slice(0, i) : "";
+  }
+
+  // callCardID maps one end of a call to the card that shows it: a method is a
+  // row on its owner type's card, so it maps to the type ID, while a
+  // package-level function has a card of its own. "" drops an endpoint the view
+  // cannot draw.
+  function callCardID(id, pkgPath, byId) {
+    if (funcIDPkg(id) !== pkgPath) return "";
+    var card = ownerTypeID(id) || String(id || "");
+    return byId.has(card) ? card : "";
+  }
+
+  // callEdges turns model.calls into the call edges of one package view. A call
+  // is kept only when both ends are declarations of pkg and each has a card:
+  // function -> function and method -> method both draw, while a call that
+  // leaves the package or collapses onto one card (a self-loop) is dropped.
+  // Calls between the same two cards share one edge; it is dashed only when
+  // every one of them went through an interface.
+  function callEdges(calls, pkg, byId) {
+    var out = [];
+    var index = {};
+    (calls || []).forEach(function (c) {
+      var from = callCardID(c.from, pkg.path, byId);
+      var to = callCardID(c.to, pkg.path, byId);
+      if (!from || !to || from === to) return;
+      var k = from + ">" + to;
+      var edge = index[k];
+      if (!edge) {
+        edge = index[k] = { from: from, to: to, ref: false, call: true, dynamic: true };
+        out.push(edge);
+      }
+      if (!c.dynamic) edge.dynamic = false;
+    });
+    return out;
+  }
+
   function isHome(idx, route) {
     return route.view === "home" || (route.view === "pkg" && !idx.pkgByPath.has(route.path));
   }
 
   // buildScene turns a model and a route into everything draw() needs. It is
   // pure: same model, route and options give the same scene. view carries the
-  // 3.2 filters: {focus, collapsed, declutter} plus the home view's selected
-  // package.
+  // current view state: {collapsed, expanded, layout, calls, query, moved} plus
+  // the home view's selected package.
   function buildScene(model, idx, route, all, view) {
     view = view || {};
     if (isHome(idx, route)) {
@@ -885,6 +887,25 @@
           if (layerViolation(model.layers, model.path, p.path, imp)) edge.violation = true;
           edges.push(edge);
         });
+      });
+      // A cross-package call in a direction the import graph already shows adds
+      // nothing, so it is skipped. A call in a direction no package imports is
+      // runtime coupling a plain import would hide, so only that becomes a
+      // callOnly edge.
+      var imported = {};
+      pkgs.forEach(function (p) {
+        (p.imports || []).forEach(function (imp) { imported[p.path + ">" + imp] = true; });
+      });
+      var callPairs = {};
+      (model.calls || []).forEach(function (c) {
+        var from = funcIDPkg(c.from);
+        var to = funcIDPkg(c.to);
+        if (!from || !to || from === to) return;
+        if (!idx.pkgByPath.has(from) || !idx.pkgByPath.has(to)) return;
+        var k = from + ">" + to;
+        if (imported[k] || callPairs[k]) return;
+        callPairs[k] = true;
+        edges.push({ from: from, to: to, ref: false, callOnly: true });
       });
       // 3.3: while searching, everything that does not match fades back.
       if (view.query) {
@@ -936,7 +957,6 @@
       all: all,
       selected: selectedID,
       collapsed: view.collapsed,
-      declutter: view.declutter,
       layout: view.layout,
       edges: pairs,
       editor: model.editor,
@@ -957,24 +977,11 @@
       tedges.push({ from: e.from, to: e.to, kind: e.kind });
     });
 
-    // Call edges are aggregated to the type level: a method of A calling a
-    // method of B draws one A -> B edge. Off by default (2.2).
+    // Call edges stay at declaration level: a package-level function has its
+    // own card and a method is shown on its owner type card. Both ends must be
+    // declarations of this package, so a call that leaves the view is dropped.
     if (view.calls) {
-      var callIndex = {};
-      (model.calls || []).forEach(function (c) {
-        var from = ownerTypeID(c.from);
-        var to = ownerTypeID(c.to);
-        if (!from || !to || from === to) return;
-        if (!byId.has(from) || !byId.has(to)) return;
-        var k = from + ">" + to;
-        var edge = callIndex[k];
-        if (!edge) {
-          edge = callIndex[k] = { from: from, to: to, ref: false, call: true, dynamic: true };
-          tedges.push(edge);
-        }
-        // One static call is enough to draw a solid line.
-        if (!c.dynamic) edge.dynamic = false;
-      });
+      tedges = tedges.concat(callEdges(model.calls, pkg, byId));
     }
 
     if (view.query) {
@@ -995,10 +1002,6 @@
       // reads left to right.
       axis: layoutMode(view.layout) === "kind" ? "h" : "v"
     };
-    // Declutter is a type-view filter: a function or value selection has no
-    // edges of its own, so leave the package's edges untouched.
-    if (view.declutter && route.view === "type") scene = declutterScene(scene, scene.selected);
-    if (view.focus) scene = focusScene(scene, view.focus);
     applyMoved(scene.nodes, view.moved);
     return scene;
   }
@@ -1104,9 +1107,8 @@
     layoutTypes: layoutTypes,
     rankTypes: rankTypes,
     typePairs: typePairs,
+    callEdges: callEdges,
     toggleCollapsed: toggleCollapsed,
-    focusScene: focusScene,
-    declutterScene: declutterScene,
     CRAP_WARN: CRAP_WARN,
     CRAP_BAD: CRAP_BAD,
     crapLevel: crapLevel,
