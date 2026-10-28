@@ -26,29 +26,40 @@ var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
 // Parse reads `git diff --unified=0` output. Paths are taken from the +++
 // header, so a deleted file (+++ /dev/null) contributes nothing.
+//
+// The parser tracks hunk state instead of pattern-matching every line: a source
+// line that happens to start with "+++" or "@@" is content, not a header, and
+// git quotes paths that contain spaces or non-ASCII characters.
 func Parse(text string) map[string][]Range {
 	out := map[string][]Range{}
 	file := ""
+	inHunk := false
+	pendingHeader := false
+
 	for _, line := range strings.Split(text, "\n") {
 		switch {
-		case strings.HasPrefix(line, "+++ "):
-			name := strings.TrimPrefix(strings.TrimPrefix(line, "+++ "), "b/")
+		case strings.HasPrefix(line, "diff --git "):
+			inHunk, pendingHeader = false, false
+		case !inHunk && strings.HasPrefix(line, "--- "):
+			pendingHeader = true
+		case !inHunk && pendingHeader && strings.HasPrefix(line, "+++ "):
+			pendingHeader = false
+			name := strings.TrimPrefix(line, "+++ ")
 			if name == "/dev/null" {
 				file = ""
 				continue
 			}
-			file = unquote(name)
+			file = strings.TrimPrefix(unquote(name), "b/")
 			if _, ok := out[file]; !ok {
 				out[file] = nil
 			}
 		case strings.HasPrefix(line, "@@"):
-			if file == "" {
-				continue
-			}
+			// A hunk header can carry a section heading, so match the numbers.
 			m := hunkRe.FindStringSubmatch(line)
-			if m == nil {
+			if m == nil || file == "" {
 				continue
 			}
+			inHunk = true
 			start, _ := strconv.Atoi(m[1])
 			count := 1
 			if m[2] != "" {

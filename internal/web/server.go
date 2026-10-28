@@ -146,7 +146,24 @@ func (s *Server) source(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "路径越界", http.StatusBadRequest)
 		return
 	}
-	info, err := os.Stat(full)
+	// Resolve symlinks before reading: a link inside the module that points
+	// outside it would otherwise hand out files the model never scanned.
+	real, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		http.Error(w, "文件不存在", http.StatusNotFound)
+		return
+	}
+	rootReal, err := filepath.EvalSymlinks(s.Root)
+	if err != nil {
+		http.Error(w, "扫描目录不可用", http.StatusInternalServerError)
+		return
+	}
+	relReal, err := filepath.Rel(rootReal, real)
+	if err != nil || relReal == ".." || strings.HasPrefix(relReal, ".."+string(filepath.Separator)) {
+		http.Error(w, "路径越界", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(real)
 	if err != nil || info.IsDir() {
 		http.Error(w, "文件不存在", http.StatusNotFound)
 		return
@@ -155,7 +172,7 @@ func (s *Server) source(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "文件过大", http.StatusRequestEntityTooLarge)
 		return
 	}
-	data, err := os.ReadFile(full)
+	data, err := os.ReadFile(real)
 	if err != nil {
 		http.Error(w, "读取失败", http.StatusInternalServerError)
 		return

@@ -217,3 +217,33 @@ func TestModelBuildUsesServerContext(t *testing.T) {
 		t.Fatalf("build budget = %v, want well over the old 15s", budget)
 	}
 }
+
+// A symlink inside the module that points outside it must not be readable: the
+// model was built from files under Root, and anything else is the machine's.
+func TestSourceRefusesSymlinkEscape(t *testing.T) {
+	dir, outside := t.TempDir(), t.TempDir()
+	secret := filepath.Join(outside, "secret.go")
+	if err := os.WriteFile(secret, []byte("package secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "escape.go")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	s := &Server{
+		Root: dir,
+		UI:   []byte("ui"),
+		JS:   []byte("js"),
+		Load: func(context.Context) (*model.Module, error) { return &model.Module{Root: dir}, nil },
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/source?path=escape.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET /source (symlink escape) = %d, want 400", resp.StatusCode)
+	}
+}

@@ -144,3 +144,40 @@ func TestRunAgainstRealRepository(t *testing.T) {
 		t.Fatalf("range = %+v, want the inserted line 4", r)
 	}
 }
+
+// A source line that begins with "+++" or "@@" is content, not a header, and a
+// quoted path keeps its slash after unquoting.
+func TestParseIsNotFooledByContent(t *testing.T) {
+	const patch = `diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -5,0 +6,2 @@
++++ b/not-a-header
++@@ -1,1 +1,1 @@
+diff --git "b/dir with space/x.go" "b/dir with space/x.go"
+--- "b/dir with space/x.go"
++++ "b/dir with space/x.go"
+@@ -2,0 +3,1 @@
++added
+`
+	got := Parse(patch)
+	if _, ok := got["not-a-header"]; ok {
+		t.Error("a content line starting with +++ became a file header")
+	}
+	files := got["a.go"]
+	if len(files) != 1 || files[0] != (Range{6, 7}) {
+		t.Fatalf("a.go ranges = %v, want [{6 7}]", files)
+	}
+	quoted := got["dir with space/x.go"]
+	if len(quoted) != 1 || quoted[0] != (Range{3, 3}) {
+		t.Fatalf("quoted path ranges = %v (keys %v)", quoted, keys(got))
+	}
+}
+
+func keys(m map[string][]Range) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
