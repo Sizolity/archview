@@ -426,136 +426,121 @@
     });
     highlightEdges(scene.selected);
 
-    scene.nodes.forEach(function (n) {
-      var g = el("g", {
-        class: "node" + (n.selected ? " selected" : "") + (n.dim ? " dim" : ""),
-        "data-id": n.id
-      });
-      // Hover text: the card truncates, the tooltip does not.
-      g.appendChild(el("title", {}, n.title + (n.sub ? " — " + n.sub : "") +
-        (n.more > 0 ? " (还有 " + n.more + " 条,点击展开)" : "")));
-      var fill = n.kind === "pkg" ? "#e0e7ff" :
-        (n.kind === "func" ? "#f1f5f9" :
-          (n.kind === "value" ? "#f0fdf4" : (n.sub === "interface" ? "#fef3c7" : "#dbeafe")));
-      var stroke = n.kind === "pkg" ? "#6366f1" :
-        (n.kind === "func" ? "#64748b" :
-          (n.kind === "value" ? "#16a34a" : (n.sub === "interface" ? "#d97706" : "#3b82f6")));
-      if (n.changed) {
-        // -diff marked this type: give it the accent and a dot, so the change
-        // stands out without hiding everything else.
-        stroke = "#ea580c";
-      }
-      g.appendChild(el("rect", {
-        x: n.x, y: n.y, width: n.w, height: n.h, rx: 9,
-        fill: fill, stroke: stroke, class: "box"
-      }));
-      var title = el("text", { x: n.x + 12, y: n.y + 20, class: "title" }, cut(n.title, 26));
-      g.appendChild(title);
-      if (n.changed) {
-        g.appendChild(el("circle", { cx: n.x + 6, cy: n.y + 6, r: 4, fill: "#ea580c", class: "changed-dot" }));
-      }
-      if (n.kind === "type") {
-        g.appendChild(el("text", { x: n.x + 12, y: n.y + 34, class: "kind" }, n.sub));
-      } else {
-        g.appendChild(el("text", { x: n.x + 12, y: n.y + 36, class: "kind" }, cut(n.sub, 40)));
-      }
-      if (n.lines) {
-        n.lines.forEach(function (line, i) {
-          g.appendChild(el("text", { x: n.x + 12, y: n.y + 54 + i * 16, class: "row" }, cut(line, 40)));
-        });
-      }
-      if (n.rows) {
-        var base = n.kind === "type" ? 34 : 54;
-        n.rows.forEach(function (row, i) {
-          g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + i * 17, class: "row" }, cut(row, 42)));
-        });
-        if (n.more > 0) {
-          var moreText = el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind",
-            style: "pointer-events: all; cursor: pointer; text-decoration: underline", fill: "#2563eb" },
-            "… 还有 " + n.more + " 条(点击查看详情)");
-          moreText.addEventListener("click", function (ev) {
-            ev.stopPropagation();
-            // Open the inspector instead of growing the card: the layout stays
-            // put, so the viewport and the zoom do not move.
-            go(A.typeHash(n.id));
-          });
-          g.appendChild(moreText);
-        }
-      }
-      if (n.kind === "pkg" && n.entry) {
-        g.appendChild(el("rect", {
-          x: n.x + n.w - 46, y: n.y + 7, width: 38, height: 17, rx: 8, fill: "#ecfeff", class: "entry-badge"
-        }));
-        g.appendChild(el("text", {
-          x: n.x + n.w - 27, y: n.y + 19.5, class: "entry-text", fill: "#0e7490", "text-anchor": "middle"
-        }, "入口"));
-      }
-      if (n.crap != null) {
-        // CRAP badge: a type is as risky as its worst method (2.3), a package as
-        // risky as its worst declaration. Leave room for the entry badge.
-        var lvl = A.crapLevel(n.crap, A.crapThresholds(state.model));
-        var bx = n.x + n.w - (n.kind === "pkg" && n.entry ? 110 : 54);
-        g.appendChild(el("rect", {
-          x: bx, y: n.y + 7, width: 46, height: 17, rx: 8,
-          fill: CRAP_FILL[lvl], class: "crap-badge"
-        }));
-        g.appendChild(el("text", {
-          x: bx + 23, y: n.y + 19.5, class: "crap-text", fill: CRAP_INK[lvl], "text-anchor": "middle"
-        }, A.formatCrap(n.crap)));
-      }
-      if (n.kind === "type") {
-        // Fold toggle (3.2): collapsed cards keep their title only.
-        var fold = el("text", { x: n.x + n.w - 16, y: n.y + n.h - 8, class: "fold" }, n.folded ? "▸" : "▾");
-        fold.addEventListener("click", function (ev) {
-          ev.stopPropagation();
-          state.collapsed = A.toggleCollapsed(state.collapsed, n.id);
-          state.sceneKey = "";
-          render();
-        });
-        g.appendChild(fold);
-      }
-      g.addEventListener("mousedown", function (ev) {
-        ev.stopPropagation();
-        // Dragging cards is off: it fought with clicking and the positions were
-        // never reapplied after a re-render anyway. The canvas still pans.
-        state.suppressClick = false;
-      });
-      g.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        if (state.suppressClick) return;
-        // A card that is already the current view must not re-render: the
-        // double-click below needs the element to stay alive.
-        if (n.selected) return;
-        // A single click on a module card selects it and stays on the module
-        // view; entering the module is the double-click below.
-        if (n.kind === "pkg") {
-          state.sel = n.id;
-          render();
-          return;
-        }
-        go(n.href);
-      });
-      // Double-click drills down: a module card enters the module, and a type,
-      // function or value card opens its source (the last level of the diagram).
-      g.addEventListener("dblclick", function (ev) {
-        ev.stopPropagation();
-        if (n.kind === "pkg") {
-          go(n.href);
-          return;
-        }
-        if (n.kind !== "type" && n.kind !== "func" && n.kind !== "value") return;
-        var href = A.editorHref(state.model.editor, state.model.root, n.pos);
-        if (!href) return;
-        if (href.indexOf("/source?") === 0) {
-          if (!state.model.root) return; // an imported IR has no sources behind it
-          href = A.withFrom(href, location.hash || "#/");
-        }
-        window.location.href = href;
-      });
-      world.appendChild(g);
-    });
+    scene.nodes.forEach(function (n) { world.appendChild(drawNode(n)); });
 
     applyTransform();
+  }
+
+  // Per-kind card colours. buildCard keeps the node's kind "interface" for an
+  // interface type, so the table alone picks the style; no capability branches.
+  var CARD_STYLE = {
+    type: { fill: "#dbeafe", stroke: "#3b82f6" },
+    interface: { fill: "#fef3c7", stroke: "#d97706" },
+    func: { fill: "#f1f5f9", stroke: "#64748b" },
+    value: { fill: "#f0fdf4", stroke: "#16a34a" },
+    pkg: { fill: "#e0e7ff", stroke: "#6366f1" }
+  };
+
+  // drawNode is the one card renderer: buildCard (ui.js) has already defaulted
+  // every field, so this only maps a node onto its SVG pieces. The kind checks
+  // that remain are the three things that genuinely differ: style, row baseline
+  // and the fold handle.
+  function drawNode(n) {
+    var isDecl = n.kind === "type" || n.kind === "interface";
+    var g = el("g", { class: "node" + (n.selected ? " selected" : "") + (n.dim ? " dim" : ""),
+      "data-id": n.id });
+    // Hover text: the card truncates, the tooltip does not.
+    g.appendChild(el("title", {}, n.title + (n.sub ? " — " + n.sub : "") +
+      (n.more > 0 ? " (还有 " + n.more + " 条,点击展开)" : "")));
+    var style = CARD_STYLE[n.kind] || CARD_STYLE.type;
+    // -diff marks a declaration: the accent stroke stands out without hiding
+    // everything else.
+    g.appendChild(el("rect", { x: n.x, y: n.y, width: n.w, height: n.h, rx: 9,
+      fill: style.fill, stroke: n.changed ? "#ea580c" : style.stroke, class: "box" }));
+    g.appendChild(el("text", { x: n.x + 12, y: n.y + 20, class: "title" }, cut(n.title, 26)));
+    if (n.changed) {
+      g.appendChild(el("circle", { cx: n.x + 6, cy: n.y + 6, r: 4, fill: "#ea580c", class: "changed-dot" }));
+    }
+    g.appendChild(el("text", { x: n.x + 12, y: n.y + (isDecl ? 34 : 36), class: "kind" },
+      cut(n.sub, 40)));
+    if (n.rows && n.rows.length) {
+      var base = isDecl ? 34 : 54;
+      var step = isDecl ? 17 : 16;
+      n.rows.forEach(function (row, i) {
+        g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + i * step, class: "row" },
+          cut(row, isDecl ? 42 : 40)));
+      });
+      if (n.more > 0) {
+        var moreText = el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * step, class: "kind",
+          style: "pointer-events: all; cursor: pointer; text-decoration: underline", fill: "#2563eb" },
+          "… 还有 " + n.more + " 条(点击查看详情)");
+        moreText.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          // Open the inspector instead of growing the card: the layout stays
+          // put, so the viewport and the zoom do not move.
+          go(A.typeHash(n.id));
+        });
+        g.appendChild(moreText);
+      }
+    }
+    if (n.entry) {
+      g.appendChild(el("rect", { x: n.x + n.w - 46, y: n.y + 7, width: 38, height: 17, rx: 8,
+        fill: "#ecfeff", class: "entry-badge" }));
+      g.appendChild(el("text", { x: n.x + n.w - 27, y: n.y + 19.5, class: "entry-text",
+        fill: "#0e7490", "text-anchor": "middle" }, "入口"));
+    }
+    if (n.crap != null) {
+      // CRAP badge: a type is as risky as its worst method (2.3), a package as
+      // risky as its worst declaration. Leave room for the entry badge.
+      var lvl = A.crapLevel(n.crap, A.crapThresholds(state.model));
+      var bx = n.x + n.w - (n.entry ? 110 : 54);
+      g.appendChild(el("rect", { x: bx, y: n.y + 7, width: 46, height: 17, rx: 8,
+        fill: CRAP_FILL[lvl], class: "crap-badge" }));
+      g.appendChild(el("text", { x: bx + 23, y: n.y + 19.5, class: "crap-text",
+        fill: CRAP_INK[lvl], "text-anchor": "middle" }, A.formatCrap(n.crap)));
+    }
+    if (isDecl) {
+      // Fold toggle (3.2): collapsed cards keep their title only.
+      var fold = el("text", { x: n.x + n.w - 16, y: n.y + n.h - 8, class: "fold" }, n.folded ? "▸" : "▾");
+      fold.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        state.collapsed = A.toggleCollapsed(state.collapsed, n.id);
+        state.sceneKey = "";
+        render();
+      });
+      g.appendChild(fold);
+    }
+    g.addEventListener("mousedown", function (ev) {
+      ev.stopPropagation();
+      // Dragging cards is off: it fought with clicking and the positions were
+      // never reapplied after a re-render anyway. The canvas still pans.
+      state.suppressClick = false;
+    });
+    g.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      if (state.suppressClick) return;
+      // A card that is already the current view must not re-render: the
+      // double-click below needs the element to stay alive.
+      if (n.selected) return;
+      // A package's select route is the module view itself; remember which box
+      // was clicked so the module view can show it selected.
+      if (n.href === "#/") state.sel = n.id;
+      go(n.href);
+    });
+    // Double-click drills down. drillHref already encodes the destination: the
+    // package route for a module card, the source link for a declaration.
+    g.addEventListener("dblclick", function (ev) {
+      ev.stopPropagation();
+      var href = n.drillHref;
+      if (!href) return;
+      if (href.charAt(0) === "#") { go(href); return; }
+      if (href.indexOf("/source?") === 0) {
+        if (!state.model.root) return; // an imported IR has no sources behind it
+        href = A.withFrom(href, location.hash || "#/");
+      }
+      window.location.href = href;
+    });
+    return g;
   }
 
   function applyTransform() {
@@ -627,53 +612,72 @@
     renderType(t);
   }
 
+  // panelFrame is the inspector's shared frame: the title line with its badges,
+  // one or more meta lines, an optional lead paragraph, the doc paragraph and
+  // the sections the view supplies. Titles are trusted markup, badge text is
+  // escaped, and meta/body are built by the views with esc().
+  function panelFrame(o) {
+    var html = "<h2>" + o.title;
+    (o.badges || []).forEach(function (b) {
+      html += ' <span class="badge' + (b.cls ? " " + b.cls : "") + '">' + esc(b.text) + "</span>";
+    });
+    html += "</h2>";
+    (o.meta || []).forEach(function (line) { html += '<div class="meta">' + line + "</div>"; });
+    if (o.lead) html += o.lead;
+    if (o.doc) html += '<p class="doc">' + esc(o.doc) + "</p>";
+    return html + (o.body || "");
+  }
+
+  // sourceButton is the "查看源码" link shared by the declaration panels.
+  function sourceButton(pos) {
+    var href = A.withFrom(sourceHref(pos), location.hash || "#/");
+    return href ? '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>' : "";
+  }
+
   // homeDetail is the module inspector for the package selected on the canvas:
   // counts, risk, change marker, both import directions and the way in.
   function homeDetail(p) {
-    var html = "<h2>" + esc(short(p.path)) + "</h2>";
-    html += '<div class="meta">' + esc(rel(p.path)) + "</div>";
     var all = A.showsAll(p, state.all);
-    html += '<div class="meta">' + A.visible(p.types, all).length + " 类型 · " +
-      A.visible(p.funcs, all).length + " 函数 · " + A.visible(A.valuesOf(p), all).length + " 变量";
     var worst = A.packageCrap(p);
-    if (worst != null) html += " " + crapChip(worst);
-    html += "</div>";
-    if (p.doc) html += '<p class="doc">' + esc(p.doc) + "</p>";
-    if (A.packageChanged(p)) html += '<p><span class="badge diff">已修改</span></p>';
-    html += '<a class="src" href="' + pkgHash(p.path) + '">进入 ' + esc(short(p.path)) + "</a>";
+    var meta = [esc(rel(p.path)),
+      A.visible(p.types, all).length + " 类型 · " + A.visible(p.funcs, all).length + " 函数 · " +
+      A.visible(A.valuesOf(p), all).length + " 变量" + (worst != null ? " " + crapChip(worst) : "")];
+    var body = "";
+    if (A.packageChanged(p)) body += '<p><span class="badge diff">已修改</span></p>';
+    body += '<a class="src" href="' + pkgHash(p.path) + '">进入 ' + esc(short(p.path)) + "</a>";
 
     var imports = p.imports || [];
-    html += "<h3>依赖</h3>";
-    if (!imports.length) html += '<p class="empty">没有模块内依赖</p>';
+    body += "<h3>依赖</h3>";
+    if (!imports.length) body += '<p class="empty">没有模块内依赖</p>';
     else {
-      html += '<div class="chips">';
+      body += '<div class="chips">';
       imports.forEach(function (i) {
-        html += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>";
+        body += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>";
       });
-      html += "</div>";
+      body += "</div>";
     }
 
     var importers = state.model.packages.filter(function (q) {
       return q.path !== p.path && (q.imports || []).indexOf(p.path) >= 0;
     });
-    html += "<h3>被依赖</h3>";
-    if (!importers.length) html += '<p class="empty">没有其他模块依赖它</p>';
+    body += "<h3>被依赖</h3>";
+    if (!importers.length) body += '<p class="empty">没有其他模块依赖它</p>';
     else {
-      html += '<div class="chips">';
+      body += '<div class="chips">';
       importers.forEach(function (q) {
-        html += '<a class="chip" href="' + pkgHash(q.path) + '">' + esc(rel(q.path)) + "</a>";
+        body += '<a class="chip" href="' + pkgHash(q.path) + '">' + esc(rel(q.path)) + "</a>";
       });
-      html += "</div>";
+      body += "</div>";
     }
-    return html;
+    return panelFrame({ title: esc(short(p.path)), meta: meta, doc: p.doc, body: body });
   }
 
   function renderHome() {
     var sel = state.sel ? idx.pkgByPath.get(state.sel) : null;
-    var html = sel ? homeDetail(sel) : "";
+    var html = sel ? homeDetail(sel) : panelFrame({ title: "模块总览" });
     // With a selection the detail leads; the full list stays below so another
     // module can be picked without going back to the canvas.
-    html += sel ? "<h3>模块总览</h3>" : "<h2>模块总览</h2>";
+    if (sel) html += "<h3>模块总览</h3>";
     html += '<div class="meta">' + state.model.packages.length + " 个包 · 单击方框选中 · 双击进入模块</div>";
     if (state.model.metrics) {
       var s = state.model.metrics;
@@ -691,86 +695,84 @@
   }
 
   function renderPkg(p) {
-    var html = "<h2>" + esc(rel(p.path)) + "</h2>";
-    html += '<div class="meta">' + esc(p.name) + " · " + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数</div>";
-    if (p.doc) html += '<p class="doc">' + esc(p.doc) + "</p>";
+    var body = "";
     if (p.imports.length) {
-      html += "<h3>依赖</h3><div class=\"chips\">";
-      p.imports.forEach(function (i) { html += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>"; });
-      html += "</div>";
+      body += "<h3>依赖</h3><div class=\"chips\">";
+      p.imports.forEach(function (i) { body += '<a class="chip" href="' + pkgHash(i) + '">' + esc(rel(i)) + "</a>"; });
+      body += "</div>";
       var bad = p.imports.filter(function (i) {
         return A.layerViolation(state.model.layers, state.model.path, p.path, i);
       });
       if (bad.length) {
-        html += "<h3>违规依赖</h3><ul class=\"rel\">";
+        body += "<h3>违规依赖</h3><ul class=\"rel\">";
         bad.forEach(function (i) {
-          html += "<li><span class=\"crap bad\">内层→外层</span> " + esc(rel(i)) + "</li>";
+          body += "<li><span class=\"crap bad\">内层→外层</span> " + esc(rel(i)) + "</li>";
         });
-        html += "</ul>";
+        body += "</ul>";
       }
     }
-    html += "<h3>类型</h3>";
+    body += "<h3>类型</h3>";
     var all = A.showsAll(p, state.all);
     var types = A.visible(p.types, all);
-    if (!types.length) html += '<p class="empty">没有导出类型</p>';
+    if (!types.length) body += '<p class="empty">没有导出类型</p>';
     else {
-      html += "<table><thead><tr><th>类型</th><th>成员</th></tr></thead><tbody>";
+      body += "<table><thead><tr><th>类型</th><th>成员</th></tr></thead><tbody>";
       types.forEach(function (t) {
-        html += '<tr><td class="name"><a href="' + typeHash(t.id) + '">' + esc(t.name) + "</a> <span class=\"badge " +
+        body += '<tr><td class="name"><a href="' + typeHash(t.id) + '">' + esc(t.name) + "</a> <span class=\"badge " +
           (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></td><td>" +
           A.visible(t.fields, all).length + " 字段 · " + A.visible(t.methods, all).length + " 方法</td></tr>";
       });
-      html += "</tbody></table>";
+      body += "</tbody></table>";
     }
     var funcs = A.visible(p.funcs, all);
     var metricsOn = !!state.model.metrics;
-    html += "<h3>函数</h3>";
-    if (!funcs.length) html += '<p class="empty">没有导出函数</p>';
+    body += "<h3>函数</h3>";
+    if (!funcs.length) body += '<p class="empty">没有导出函数</p>';
     else {
-      html += "<table><thead><tr><th>函数</th><th>签名</th>" + (metricsOn ? "<th>CRAP</th>" : "") +
+      body += "<table><thead><tr><th>函数</th><th>签名</th>" + (metricsOn ? "<th>CRAP</th>" : "") +
         "</tr></thead><tbody>";
       funcs.forEach(function (f) {
-        html += '<tr><td class="name">' + esc(f.name) + '</td><td><code class="sig">' + esc(f.sig) +
+        body += '<tr><td class="name">' + esc(f.name) + '</td><td><code class="sig">' + esc(f.sig) +
           "</code></td>" + (metricsOn ? crapCell(f) : "") + "</tr>";
       });
-      html += "</tbody></table>";
+      body += "</tbody></table>";
     }
-    side.innerHTML = html;
+    side.innerHTML = panelFrame({ title: esc(rel(p.path)), doc: p.doc, body: body,
+      meta: [esc(p.name) + " · " + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数"] });
   }
 
   function renderType(t) {
-    var html = "<h2>" + esc(t.name) + ' <span class="badge ' +
-      (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span>";
+    var badges = [{
+      cls: t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : ""),
+      text: t.kind
+    }];
     if (t.changed || (t.methods || []).some(function (m) { return m.changed; })) {
-      html += ' <span class="badge diff">改动</span>';
+      badges.push({ cls: "diff", text: "改动" });
     }
-    html += "</h2>";
-    html += '<div class="meta">' + esc(rel(t.pkg.path)) + " · " + esc(t.pos) +
-      (state.model.metrics ? " " + crapChip(A.typeCrap(t)) : "") + "</div>";
-    if (t.doc) html += '<p class="doc">' + esc(t.doc) + "</p>";
 
+    var body = "";
     var fields = vis(t.fields), methods = vis(t.methods);
-    html += "<h3>字段</h3>";
-    if (!fields.length) html += '<p class="empty">没有字段</p>';
+    body += "<h3>字段</h3>";
+    if (!fields.length) body += '<p class="empty">没有字段</p>';
     else {
-      html += "<table><thead><tr><th>字段</th><th>类型</th></tr></thead><tbody>";
+      body += "<table><thead><tr><th>字段</th><th>类型</th></tr></thead><tbody>";
       fields.forEach(function (f) {
         var typ = (f.refs && f.refs.length) ? f.refs.map(function (r) { return typeLink(r); }).join(" / ") : '<code class="sig">' + esc(f.type) + "</code>";
-        html += '<tr><td class="name">' + (f.embedded ? "«嵌入»" : esc(f.name)) + "</td><td>" + typ + "</td></tr>";
+        body += '<tr><td class="name">' + (f.embedded ? "«嵌入»" : esc(f.name)) + "</td><td>" + typ + "</td></tr>";
       });
-      html += "</tbody></table>";
+      body += "</tbody></table>";
     }
 
-    html += "<h3>方法</h3>";
-    if (!methods.length) html += '<p class="empty">没有方法</p>';
+    body += "<h3>方法</h3>";
+    if (!methods.length) body += '<p class="empty">没有方法</p>';
     else {
-      html += "<table><thead><tr><th>方法</th><th>签名</th>" + (state.model.metrics ? "<th>CRAP</th>" : "") +
+      body += "<table><thead><tr><th>方法</th><th>签名</th>" + (state.model.metrics ? "<th>CRAP</th>" : "") +
         "</tr></thead><tbody>";
       methods.forEach(function (m) {
-        html += '<tr><td class="name">' + esc(m.name) + '</td><td><code class="sig">' + esc(m.sig) +
+        body += '<tr><td class="name">' + esc(m.name) + '</td><td><code class="sig">' + esc(m.sig) +
           "</code></td>" + (state.model.metrics ? crapCell(m) : "") + "</tr>";
       });
-      html += "</tbody></table>";
+      body += "</tbody></table>";
     }
 
     var out = [];
@@ -780,15 +782,15 @@
     out = out.filter(function (o) { if (seen[o.id]) return false; seen[o.id] = true; return true; });
     var inc = idx.incoming.get(t.id) || [];
 
-    html += "<h3>关系</h3><div class=\"rel\">";
-    html += "<div><b>引用</b>" + (out.length ? "<ul>" + out.map(function (o) {
+    body += "<h3>关系</h3><div class=\"rel\">";
+    body += "<div><b>引用</b>" + (out.length ? "<ul>" + out.map(function (o) {
       return "<li>" + esc(o.label) + " → " + typeLink(o.id) + "</li>";
     }).join("") + "</ul>" : '<p class="empty">没有引用模块内类型</p>') + "</div>";
-    html += "<div><b>被引用</b>" + (inc.length ? "<ul>" + inc.map(function (o) {
+    body += "<div><b>被引用</b>" + (inc.length ? "<ul>" + inc.map(function (o) {
       var from = idx.typeById.has(o.from) ? typeLink(o.from) : '<a href="' + pkgHash(o.from) + '">' + esc(rel(o.from)) + "</a>";
       return "<li>" + from + " · " + esc(o.label) + "</li>";
     }).join("") + "</ul>" : '<p class="empty">没有其他类型或函数引用它</p>') + "</div>";
-    html += "</div>";
+    body += "</div>";
 
     // 2.2: one hop of the call graph, straight from the model.
     var calls = state.model.calls || [];
@@ -802,30 +804,25 @@
       var moreNote = function (list) {
         return list.length > 12 ? '<p class="empty">还有 ' + (list.length - 12) + " 条</p>" : "";
       };
-      html += "<h3>调用</h3><div class=\"rel\">";
-      html += "<div><b>调用了</b>" + (callsOut.length
+      body += "<h3>调用</h3><div class=\"rel\">";
+      body += "<div><b>调用了</b>" + (callsOut.length
         ? "<ul>" + callsOut.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(callsOut)
         : '<p class="empty">没有调用模块内函数</p>') + "</div>";
-      html += "<div><b>被调用</b>" + (calledBy.length
+      body += "<div><b>被调用</b>" + (calledBy.length
         ? "<ul>" + calledBy.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(calledBy)
         : '<p class="empty">没有被模块内函数调用</p>') + "</div>";
-      html += "</div>";
+      body += "</div>";
     }
+    body += sourceButton(t.pos);
 
-    var href = A.withFrom(sourceHref(t.pos), location.hash || "#/");
-    if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
-    side.innerHTML = html;
+    side.innerHTML = panelFrame({ title: esc(t.name), badges: badges, doc: t.doc, body: body,
+      meta: [esc(rel(t.pkg.path)) + " · " + esc(t.pos) +
+        (state.model.metrics ? " " + crapChip(A.typeCrap(t)) : "")] });
   }
 
   // renderFunc is the inspector for a package-level function: the type panel's
   // shape plus the one-hop call list the model already carries.
   function renderFunc(f, pkg) {
-    var html = "<h2>" + esc(f.name) + ' <span class="badge">函数</span></h2>';
-    html += '<div class="meta"><a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(f.pos) +
-      (f.metrics ? " " + crapChip(f.metrics.crap) : "") + "</div>";
-    if (f.sig) html += '<p><code class="sig">' + esc(f.name + f.sig) + "</code></p>";
-    if (f.doc) html += '<p class="doc">' + esc(f.doc) + "</p>";
-
     // Calls are stored at function granularity (2.2), so the exact declaration
     // ID is enough: there is no owner type to aggregate here.
     var id = f.id || (pkg.path + "#" + f.name);
@@ -839,36 +836,35 @@
     var moreNote = function (list) {
       return list.length > 12 ? '<p class="empty">还有 ' + (list.length - 12) + " 条</p>" : "";
     };
-    html += "<h3>调用</h3><div class=\"rel\">";
-    html += "<div><b>调用了</b>" + (callsOut.length
+    var body = "<h3>调用</h3><div class=\"rel\">";
+    body += "<div><b>调用了</b>" + (callsOut.length
       ? "<ul>" + callsOut.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(callsOut)
       : '<p class="empty">没有调用模块内函数</p>') + "</div>";
-    html += "<div><b>被调用</b>" + (calledBy.length
+    body += "<div><b>被调用</b>" + (calledBy.length
       ? "<ul>" + calledBy.slice(0, 12).map(callItem).join("") + "</ul>" + moreNote(calledBy)
       : '<p class="empty">没有被模块内函数调用</p>') + "</div>";
-    html += "</div>";
+    body += "</div>";
+    body += sourceButton(f.pos);
 
-    var href = A.withFrom(sourceHref(f.pos), location.hash || "#/");
-    if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
-    side.innerHTML = html;
+    side.innerHTML = panelFrame({ title: esc(f.name), badges: [{ text: "函数" }], doc: f.doc, body: body,
+      meta: ['<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(f.pos) +
+        (f.metrics ? " " + crapChip(f.metrics.crap) : "")],
+      lead: f.sig ? '<p><code class="sig">' + esc(f.name + f.sig) + "</code></p>" : "" });
   }
 
   // renderValue is the inspector for a constant or variable. ValueInfo has no
   // kind of its own, so the slice it came from decides the badge.
   function renderValue(v, pkg) {
     var isConst = (pkg.consts || []).indexOf(v) >= 0;
-    var html = "<h2>" + esc(v.name) + ' <span class="badge">' + (isConst ? "常量" : "变量") + "</span></h2>";
-    html += '<div class="meta"><a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(v.pos) + "</div>";
-    if (v.doc) html += '<p class="doc">' + esc(v.doc) + "</p>";
+    var body = "<h3>声明</h3><table><tbody>";
+    body += '<tr><td class="name">类型</td><td><code class="sig">' + esc(v.type || "—") + "</code></td></tr>";
+    body += '<tr><td class="name">值</td><td><code class="sig">' + esc(v.value || "—") + "</code></td></tr>";
+    body += "</tbody></table>";
+    body += sourceButton(v.pos);
 
-    html += "<h3>声明</h3><table><tbody>";
-    html += '<tr><td class="name">类型</td><td><code class="sig">' + esc(v.type || "—") + "</code></td></tr>";
-    html += '<tr><td class="name">值</td><td><code class="sig">' + esc(v.value || "—") + "</code></td></tr>";
-    html += "</tbody></table>";
-
-    var href = A.withFrom(sourceHref(v.pos), location.hash || "#/");
-    if (href) html += '<a class="src" href="' + href + '" target="_blank" rel="noopener">查看源码</a>';
-    side.innerHTML = html;
+    side.innerHTML = panelFrame({ title: esc(v.name), doc: v.doc, body: body,
+      badges: [{ text: isConst ? "常量" : "变量" }],
+      meta: ['<a href="' + pkgHash(pkg.path) + '">' + esc(rel(pkg.path)) + "</a> · " + esc(v.pos)] });
   }
 
   function renderSearch() {

@@ -357,6 +357,112 @@
     };
   }
 
+  // ---------- cards ----------
+
+  // buildCard is the one place a canvas card is assembled. Every field the
+  // renderer knows about is defaulted here, so a capability added once reaches
+  // all four card kinds instead of being patched into each layout function.
+  // drawNode (ui.html) maps these fields to SVG and owns CARD_STYLE.
+  //
+  //   kind      type | func | value | pkg (an interface is a type card with
+  //             its own style entry)
+  //   decl      the model declaration the card stands for
+  //   pkg       its owning package
+  //   opts      view state: all, folded, expanded, selected, modelPath,
+  //             editor, root, w, h
+  //
+  // href is the route a single click selects; drillHref is the double-click
+  // target: the editor/source link for a declaration, the module route for a
+  // package (so a package card can never open a source page).
+  function buildCard(kind, decl, pkg, opts) {
+    opts = opts || {};
+    var all = !!opts.all;
+    var node = {
+      id: "",
+      kind: kind,
+      title: "",
+      sub: "",
+      rows: [],
+      more: 0,
+      folded: !!opts.folded,
+      crap: null,
+      changed: false,
+      entry: false,
+      selected: false,
+      href: "#/",
+      drillHref: "",
+      pos: "",
+      w: CARD_W,
+      h: 60
+    };
+
+    if (kind === "pkg") {
+      node.id = decl.path;
+      node.title = short(decl.path);
+      // The module view's single click selects a package without changing the
+      // route, so its select href is the module view itself.
+      node.href = "#/";
+      node.drillHref = pkgHash(decl.path);
+      node.sub = docLine(decl.doc) || relPath(opts.modelPath || "", decl.path);
+      node.rows = [visible(decl.types, showsAll(decl, all)).length + " 类型 · " +
+        visible(decl.funcs, showsAll(decl, all)).length + " 函数" +
+        (valuesOf(decl).length ? " · " + valuesOf(decl).length + " 变量" : "") +
+        (decl.main ? " · 程序入口" : "")];
+      node.crap = packageCrap(decl);
+      node.changed = packageChanged(decl);
+      node.entry = !!decl.main;
+      node.selected = opts.selected === node.id;
+      node.h = opts.h || 68;
+      node.w = opts.w || 240;
+      return node;
+    }
+
+    if (kind === "type") {
+      node.kind = decl.kind === "interface" ? "interface" : "type";
+      node.id = decl.id;
+      node.title = decl.name;
+      node.sub = docLine(decl.doc) || (decl.kind + " · " + pkg.name);
+      // A type card's rows are its printed declaration when the model has one,
+      // otherwise its fields and methods; the cap keeps a card readable.
+      var allRows = node.folded ? [] : (decl.text ? textRows(decl.text) : typeRows(decl, all));
+      var limit = opts.expanded ? allRows.length : 7;
+      node.rows = allRows.slice(0, limit);
+      node.more = allRows.length - node.rows.length;
+      node.h = node.folded ? 44 : 30 + Math.max(1, node.rows.length) * 17 + (node.more > 0 ? 17 : 0) + 12;
+      node.crap = typeCrap(decl);
+      node.changed = typeChanged(decl);
+      node.href = typeHash(decl.id);
+    } else {
+      var id = kind === "func" ? (decl.id || (pkg.path + "#" + decl.name)) : (pkg.path + "#" + decl.name);
+      node.id = id;
+      node.title = decl.name;
+      if (kind === "func") {
+        node.sub = docLine(decl.doc) || decl.sig || "";
+        node.href = funcHash(id);
+        node.crap = decl.metrics ? decl.metrics.crap : null;
+      } else {
+        node.sub = docLine(decl.doc) || valueSub(decl);
+        node.href = valueHash(id);
+      }
+      node.changed = !!decl.changed;
+      node.h = opts.h || 60;
+    }
+
+    node.pos = decl.pos || "";
+    node.drillHref = editorHref(opts.editor, opts.root, node.pos);
+    node.selected = opts.selected === node.id;
+    if (opts.w) node.w = opts.w;
+    if (opts.h) node.h = opts.h;
+    return node;
+  }
+
+  // Thin factories keep the layout call sites short; the defaults stay in
+  // buildCard.
+  function typeCard(t, pkg, opts) { return buildCard("type", t, pkg, opts); }
+  function funcCard(f, pkg, opts) { return buildCard("func", f, pkg, opts); }
+  function valueCard(v, pkg, opts) { return buildCard("value", v, pkg, opts); }
+  function packageCard(p, opts) { return buildCard("pkg", p, p, opts); }
+
   // ---------- layout ----------
 
   // layoutPackages puts a package in the column of its import depth: a
@@ -390,25 +496,10 @@
     ds.forEach(function (d) {
       var list = cols.get(d).slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
       list.forEach(function (p, i) {
-        nodes.push({
-          id: p.path,
-          kind: "pkg",
-          x: 40 + d * 320,
-          y: 40 + i * 96,
-          w: 240,
-          h: 68,
-          title: short(p.path),
-          sub: docLine(p.doc) || relPath(modelPath, p.path),
-          lines: [visible(p.types, showsAll(p, all)).length + " 类型 · " +
-            visible(p.funcs, showsAll(p, all)).length + " 函数" +
-            (valuesOf(p).length ? " · " + valuesOf(p).length + " 变量" : "") +
-            (p.main ? " · 程序入口" : "")],
-          changed: packageChanged(p),
-          entry: !!p.main,
-          crap: packageCrap(p),
-          href: pkgHash(p.path),
-          selected: false
-        });
+        var n = packageCard(p, { modelPath: modelPath, all: all, selected: opts.selected || "" });
+        n.x = 40 + d * 320;
+        n.y = 40 + i * 96;
+        nodes.push(n);
       });
     });
     return nodes;
@@ -631,10 +722,6 @@
     return rank;
   }
 
-  function typeCard(t, h, rows, more, folded) {
-    return { t: t, h: h, rows: rows, more: more, folded: folded };
-  }
-
   // layoutTypes places the type cards. Two deterministic modes:
   //
   //   layer (default) — one band per dependency depth, users on top,
@@ -652,25 +739,31 @@
     var declutter = !!opts.declutter;
     var mode = layoutMode(opts.layout);
     var edges = opts.edges || [];
+    var cardOpts = { all: all, selected: selected, editor: opts.editor, root: opts.root };
 
     var cards = types.map(function (t) {
-      var folded = declutter || collapsed.indexOf(t.id) >= 0;
-      var rows = folded ? [] : (t.text ? textRows(t.text) : typeRows(t, all));
-      var shown = rows.slice(0, expanded.indexOf(t.id) >= 0 ? rows.length : 7);
-      var more = rows.length - shown.length;
-      var h = folded ? 44 : 30 + Math.max(1, shown.length) * 17 + (more > 0 ? 17 : 0) + 12;
-      return typeCard(t, h, shown, more, folded);
+      return typeCard(t, pkg, {
+        all: all,
+        selected: selected,
+        folded: declutter || collapsed.indexOf(t.id) >= 0,
+        expanded: expanded.indexOf(t.id) >= 0,
+        editor: opts.editor,
+        root: opts.root
+      });
     });
+
+    var kindOf = {};
+    types.forEach(function (t) { kindOf[t.id] = t.kind; });
 
     var placed = [];
     if (mode === "kind") {
       var kindOrder = { struct: 0, interface: 1, type: 2 };
       var sorted = cards.slice().sort(function (a, b) {
-        var ka = kindOrder[a.t.kind], kb = kindOrder[b.t.kind];
+        var ka = kindOrder[kindOf[a.id]], kb = kindOrder[kindOf[b.id]];
         if (ka === undefined) ka = 3;
         if (kb === undefined) kb = 3;
         if (ka !== kb) return ka - kb;
-        return a.t.name.localeCompare(b.t.name);
+        return a.title.localeCompare(b.title);
       });
       var ys = [];
       for (var c = 0; c < COLS; c++) ys.push(40);
@@ -683,12 +776,12 @@
       var rank = rankTypes(types, edges);
       var bands = {};
       cards.forEach(function (card) {
-        var r = rank[card.t.id] || 0;
+        var r = rank[card.id] || 0;
         (bands[r] = bands[r] || []).push(card);
       });
       var y = 40;
       Object.keys(bands).map(Number).sort(function (a, b) { return a - b; }).forEach(function (r) {
-        var list = bands[r].sort(function (a, b) { return a.t.name.localeCompare(b.t.name); });
+        var list = bands[r].sort(function (a, b) { return a.title.localeCompare(b.title); });
         for (var i = 0; i < list.length; i += PER_ROW) {
           var chunk = list.slice(i, i + PER_ROW);
           var maxH = 0;
@@ -703,24 +796,9 @@
     }
 
     var nodes = placed.map(function (p) {
-      return {
-        id: p.card.t.id,
-        kind: "type",
-        x: p.x,
-        y: p.y,
-        w: CARD_W,
-        h: p.card.h,
-        title: p.card.t.name,
-        rows: p.card.rows,
-        more: p.card.more,
-        folded: p.card.folded,
-        sub: p.card.t.kind + " · " + pkg.name,
-        pos: p.card.t.pos,
-        crap: typeCrap(p.card.t),
-        changed: typeChanged(p.card.t),
-        href: typeHash(p.card.t.id),
-        selected: selected === p.card.t.id
-      };
+      p.card.x = p.x;
+      p.card.y = p.y;
+      return p.card;
     });
 
     // Function band: package-level functions are nodes too. Go packages are
@@ -733,22 +811,10 @@
     nodes.forEach(function (n) { bandY = Math.max(bandY, n.y + n.h + 56); });
     if (fns.length) {
       fns.forEach(function (f, i) {
-        var id = f.id || (pkg.path + "#" + f.name);
-        nodes.push({
-          id: id,
-          kind: "func",
-          x: 40 + (i % PER_ROW) * (CARD_W + 40),
-          y: bandY + Math.floor(i / PER_ROW) * 76,
-          w: CARD_W,
-          h: 60,
-          title: f.name,
-          sub: docLine(f.doc) || f.sig,
-          pos: f.pos,
-          crap: f.metrics ? f.metrics.crap : null,
-          changed: !!f.changed,
-          href: funcHash(id),
-          selected: selected === id
-        });
+        var n = funcCard(f, pkg, cardOpts);
+        n.x = 40 + (i % PER_ROW) * (CARD_W + 40);
+        n.y = bandY + Math.floor(i / PER_ROW) * 76;
+        nodes.push(n);
       });
     }
     // Value band: an embed or constant package holds no types and no functions,
@@ -757,21 +823,10 @@
     if (values.length) {
       var valueY = fns.length ? bandY + Math.ceil(fns.length / PER_ROW) * 76 : bandY;
       values.forEach(function (v, i) {
-        var id = pkg.path + "#" + v.name;
-        nodes.push({
-          id: id,
-          kind: "value",
-          x: 40 + (i % PER_ROW) * (CARD_W + 40),
-          y: valueY + Math.floor(i / PER_ROW) * 76,
-          w: CARD_W,
-          h: 60,
-          title: v.name,
-          sub: valueSub(v),
-          pos: v.pos,
-          changed: !!v.changed,
-          href: valueHash(id),
-          selected: selected === id
-        });
+        var n = valueCard(v, pkg, cardOpts);
+        n.x = 40 + (i % PER_ROW) * (CARD_W + 40);
+        n.y = valueY + Math.floor(i / PER_ROW) * 76;
+        nodes.push(n);
       });
     }
     return nodes;
@@ -813,10 +868,13 @@
       var pkgs = model.packages.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
       var selected = view.selected || "";
       if (selected && !idx.pkgByPath.has(selected)) selected = "";
-      var nodes = layoutPackages(pkgs, idx.pkgByPath, { modelPath: model.path, all: all });
       // The module view has one selection: the card the reader clicked. It is
       // separate from the route, which only changes on a double-click.
-      nodes.forEach(function (n) { n.selected = n.id === selected; });
+      var nodes = layoutPackages(pkgs, idx.pkgByPath, {
+        modelPath: model.path,
+        all: all,
+        selected: selected
+      });
       var edges = [];
       pkgs.forEach(function (p) {
         (p.imports || []).forEach(function (imp) {
@@ -880,7 +938,9 @@
       collapsed: view.collapsed,
       declutter: view.declutter,
       layout: view.layout,
-      edges: pairs
+      edges: pairs,
+      editor: model.editor,
+      root: model.root
     });
     var byId = new Map();
     tnodes.forEach(function (n) { byId.set(n.id, n); });
@@ -1034,6 +1094,11 @@
     editorHref: editorHref,
     indexModel: indexModel,
     isHome: isHome,
+    buildCard: buildCard,
+    typeCard: typeCard,
+    funcCard: funcCard,
+    valueCard: valueCard,
+    packageCard: packageCard,
     layoutPackages: layoutPackages,
     typeRows: typeRows,
     layoutTypes: layoutTypes,

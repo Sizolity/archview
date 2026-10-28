@@ -202,7 +202,8 @@ test("layoutPackages puts importers to the right of what they import", () => {
   assert.ok(app.x > store.x, "app imports store, so it sits in a later column");
   assert.equal(store.sub, "store");
   assert.equal(store.title, "store");
-  assert.equal(store.href, ui.pkgHash("example.com/app/store"));
+  assert.equal(store.href, "#/", "a click selects a package in place");
+  assert.equal(store.drillHref, ui.pkgHash("example.com/app/store"));
 });
 
 test("buildScene draws packages and imports on the home view", () => {
@@ -1111,7 +1112,7 @@ test("a package of variables gets value cards and a count", () => {
     JSON.stringify(values.map((n) => [n.x, n.y, n.w, n.h])));
 
   const home = ui.buildScene(model, idx, { view: "home" }, false);
-  assert.ok(home.nodes[0].lines[0].indexOf("4 变量") >= 0, home.nodes[0].lines[0]);
+  assert.ok(home.nodes[0].rows[0].indexOf("4 变量") >= 0, home.nodes[0].rows[0]);
 });
 test("value cards show the initialiser", () => {
   assert.equal(ui.valueSub({ type: "[]byte" }), "var []byte");
