@@ -122,6 +122,8 @@
   .edge.call { stroke: #0891b2; }
   .edge.call.dynamic { stroke-dasharray: 3 3; }
   .edge.impl { stroke: #16a34a; }
+  .edge.hl { stroke-width: 2.6; }
+  .edge.faded { opacity: .18; }
   .edge.emb { stroke: #2563eb; }
   .badge-svg { font-size: 9px; fill: #475569; }
   .crap { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -395,9 +397,15 @@
     scene.edges.forEach(function (e) {
       var a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) return;
+      // With a selection, the edges that touch it stay in front and the rest
+      // recede, so the card's relations read at a glance.
+      var cls = edgeClass(e);
+      if (scene.selected) {
+        cls += (e.from === scene.selected || e.to === scene.selected) ? " hl" : " faded";
+      }
       var p = el("path", {
         d: A.edgePath(a, b, scene.axis),
-        class: edgeClass(e),
+        class: cls,
         "marker-end": "url(#" + markerFor(e) + ")"
       });
       if (!e.ref) {
