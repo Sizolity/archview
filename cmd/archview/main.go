@@ -193,23 +193,58 @@ func run(ctx context.Context, args []string) error {
 		noMetrics = !*cfg.Metrics.Enabled
 	}
 
-	// collect runs go-crap once per model build, or not at all.
-	var collect func(context.Context, string) *crap.Bundle
-	if !noMetrics && f.importPath == "" {
-		var crapArgs []string
-		if f.crapProfile != "" {
-			crapArgs = append(crapArgs, "--coverage-profile", f.crapProfile)
+	m, cached, load, err := loadInput(ctx, f, cfg, mode, makeCollector(f, cfg, noMetrics), logger)
+	if err != nil {
+		return err
+	}
+
+	if f.out != "" || f.ednOut != "" {
+		return writeOutputs(m, mode, f.out, f.ednOut, logger)
+	}
+	return serve(ctx, newServer(ctx, m, load, cached, f.watch, logger), f.addr, logger)
+}
+
+// makeCollector returns the go-crap hook the loader calls, or nil when the
+// scores are off or the model is imported rather than scanned.
+func makeCollector(f *cliFlags, cfg *config.Config, noMetrics bool) func(context.Context, string) *crap.Bundle {
+	if noMetrics || f.importPath != "" {
+		return nil
+	}
+	var args []string
+	if f.crapProfile != "" {
+		args = append(args, "--coverage-profile", f.crapProfile)
+	}
+	cacheDir := f.cacheDir
+	if cacheDir == "" {
+		cacheDir = defaultCacheDir()
+	}
+	if f.noCrapCache {
+		cacheDir = ""
+	}
+	return func(c context.Context, dir string) *crap.Bundle {
+		return crap.CollectCached(c, dir, f.crapCmd, args, cacheDir)
+	}
+}
+
+// loadInput is the import-or-scan branch: it returns the model, the cache that
+// can rebuild it, and the loader the server calls for every request.
+func loadInput(ctx context.Context, f *cliFlags, cfg *config.Config, mode string,
+	collect func(context.Context, string) *crap.Bundle, logger *slog.Logger,
+) (*model.Module, *cache.Cache, func(context.Context) (*model.Module, error), error) {
+	if f.importPath != "" {
+		// An imported IR replaces the scan entirely: there is no module to read.
+		data, err := os.ReadFile(f.importPath)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("读取 EDN 失败: %w", err)
 		}
-		cacheDir := f.cacheDir
-		if cacheDir == "" {
-			cacheDir = defaultCacheDir()
+		imported, ignored, err := export.Import(data)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("EDN 无法解析: %w", err)
 		}
-		if f.noCrapCache {
-			cacheDir = ""
-		}
-		collect = func(c context.Context, dir string) *crap.Bundle {
-			return crap.CollectCached(c, dir, f.crapCmd, crapArgs, cacheDir)
-		}
+		imported.Editor = mode
+		logger.Info("已导入 EDN", "path", f.importPath, "packages", len(imported.Packages),
+			"edges", len(imported.Edges), "ignored", ignored)
+		return imported, nil, func(context.Context) (*model.Module, error) { return imported, nil }, nil
 	}
 
 	// The loader applies the editor mode and a CRAP snapshot taken from the same
@@ -218,48 +253,27 @@ func run(ctx context.Context, args []string) error {
 	loadFn := func(c context.Context, dir string) (*model.Module, error) {
 		return loadModel(c, dir, cfg, mode, collect, f.diffRef)
 	}
-
-	var m *model.Module
-	var cached *cache.Cache
-	var load func(context.Context) (*model.Module, error)
-	if f.importPath != "" {
-		// An imported IR replaces the scan entirely: there is no module to read.
-		data, err := os.ReadFile(f.importPath)
-		if err != nil {
-			return fmt.Errorf("读取 EDN 失败: %w", err)
-		}
-		imported, ignored, err := export.Import(data)
-		if err != nil {
-			return fmt.Errorf("EDN 无法解析: %w", err)
-		}
-		imported.Editor = mode
-		m = imported
-		load = func(context.Context) (*model.Module, error) { return imported, nil }
-		logger.Info("已导入 EDN", "path", f.importPath, "packages", len(m.Packages),
-			"edges", len(m.Edges), "ignored", ignored)
-	} else {
-		cached = cache.New(f.dir, loadFn)
-		m, err = cached.Load(ctx)
-		if err != nil {
-			return fmt.Errorf("扫描模块失败: %w", err)
-		}
-		load = cached.Load
-		logger.Info("索引完成", "packages", len(m.Packages), "root", m.Root, "layers", len(cfg.Layers))
+	cached := cache.New(f.dir, loadFn)
+	m, err := cached.Load(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("扫描模块失败: %w", err)
 	}
+	logger.Info("索引完成", "packages", len(m.Packages), "root", m.Root, "layers", len(cfg.Layers))
+	return m, cached, cached.Load, nil
+}
 
-	if f.out != "" || f.ednOut != "" {
-		return writeOutputs(m, mode, f.out, f.ednOut, logger)
-	}
-
+// newServer wires the handlers and, under -watch, the reload broadcaster.
+func newServer(ctx context.Context, m *model.Module, load func(context.Context) (*model.Module, error),
+	cached *cache.Cache, watch bool, logger *slog.Logger) *web.Server {
 	srv := &web.Server{Root: m.Root, UI: assets.UI, JS: assets.JS, CSS: assets.CSS, Ctx: ctx, Load: load}
 	switch {
-	case f.watch && cached != nil:
+	case watch && cached != nil:
 		srv.Watch = cache.NewWatcher()
 		go cache.WatchLoop(ctx, cached, srv.Watch, 500*time.Millisecond)
-	case f.watch:
+	case watch:
 		logger.Warn("-watch 对导入的 EDN 无效,已忽略")
 	}
-	return serve(ctx, srv, f.addr, logger)
+	return srv
 }
 
 // writeOutputs renders the model to the files -out and -edn asked for.
