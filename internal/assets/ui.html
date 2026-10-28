@@ -128,17 +128,11 @@
   .crap.warn { background: #fef3c7; color: #92400e; }
   .crap.bad { background: #fee2e2; color: #991b1b; }
   .legend { color: var(--muted); font-size: 11px; white-space: nowrap; }
-  #cardhelp-btn {
-    position: fixed; right: 18px; bottom: 18px; z-index: 21;
-    padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
-    background: var(--panel); color: #334155; font: inherit; font-size: 12px;
-    cursor: pointer; box-shadow: 0 2px 8px rgba(15,23,42,.08);
-  }
-  #cardhelp-btn:hover { border-color: #bfdbfe; background: var(--soft); }  .cardhelp {
-    position: fixed; right: 18px; bottom: 58px; z-index: 20; display: none;
+  .cardhelp {
+    position: fixed; right: 18px; bottom: 18px; z-index: 20; display: block;
     max-height: 62vh; overflow: auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(15,23,42,.12); padding: 10px 14px; font-size: 12px; color: #334155;
+    box-shadow: 0 8px 24px rgba(15,23,42,.12); padding: 8px 12px; font-size: 11px; color: #334155;
   }
   .cardhelp.open { display: block; }
   .cardhelp h4 { margin: 2px 0 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
@@ -181,7 +175,7 @@
   </div>
 </header>
 <div id="warnings" class="warnings" hidden></div>
-<button id="cardhelp-btn" type="button" title="卡片颜色与连线说明">卡片说明</button><div id="cardhelp" class="cardhelp" role="dialog" aria-label="卡片样式说明">
+<div id="cardhelp" class="cardhelp" role="dialog" aria-label="卡片样式说明">
   <h4>卡片颜色</h4>
   <div><span class="sw" style="background:#dbeafe;border-color:#3b82f6"></span>类型(struct / 命名类型)</div>
   <div><span class="sw" style="background:#fef3c7;border-color:#d97706"></span>接口(interface)</div>
@@ -1021,7 +1015,7 @@
 
   // Card style help: a small panel, so the colours and badges explain themselves.
   var cardhelp = document.getElementById("cardhelp");
-  var cardhelpBtn = document.getElementById("cardhelp-btn");
+  var cardhelpBtn = null; // the panel is always visible now
   if (cardhelpBtn && cardhelp) {
     cardhelpBtn.addEventListener("click", function (ev) {
       ev.stopPropagation();
