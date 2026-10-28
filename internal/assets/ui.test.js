@@ -1132,3 +1132,18 @@ test("package cards carry the worst CRAP in the package", () => {
   const card = scene.nodes.find((n) => n.title === "app");
   assert.equal(card.crap, 40);
 });
+test("package cards show the doc comment when the package has one", () => {
+  const model = {
+    path: "example.com/m",
+    packages: [
+      { path: "example.com/m/a", name: "a", doc: "Package a does things.", types: [], funcs: [] },
+      { path: "example.com/m/b", name: "b", types: [], funcs: [] },
+    ],
+  };
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "home" }, false);
+  const a = scene.nodes.find((n) => n.title === "a");
+  const b = scene.nodes.find((n) => n.title === "b");
+  assert.equal(a.sub, "Package a does things.");
+  assert.equal(b.sub, "b");
+});

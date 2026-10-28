@@ -398,7 +398,7 @@
           w: 240,
           h: 68,
           title: short(p.path),
-          sub: relPath(modelPath, p.path),
+          sub: docLine(p.doc) || relPath(modelPath, p.path),
           lines: [visible(p.types, showsAll(p, all)).length + " 类型 · " +
             visible(p.funcs, showsAll(p, all)).length + " 函数" +
             (valuesOf(p).length ? " · " + valuesOf(p).length + " 变量" : "") +
