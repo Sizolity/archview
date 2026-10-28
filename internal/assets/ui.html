@@ -448,7 +448,23 @@
       g.addEventListener("click", function (ev) {
         ev.stopPropagation();
         if (state.suppressClick) return;
+        // A card that is already the current view must not re-render: the
+        // double-click below needs the element to stay alive.
+        if (n.selected || n.kind === "func") return;
         go(n.href);
+      });
+      // Double-click drills into the source: the card is the last level of the
+      // diagram, so the next thing to read is the code itself.
+      g.addEventListener("dblclick", function (ev) {
+        ev.stopPropagation();
+        if (n.kind !== "type" && n.kind !== "func") return;
+        var href = A.editorHref(state.model.editor, state.model.root, n.pos);
+        if (!href) return;
+        if (href.indexOf("/source?") === 0) {
+          if (!state.model.root) return; // an imported IR has no sources behind it
+          href = A.withFrom(href, location.hash || "#/");
+        }
+        window.location.href = href;
       });
       world.appendChild(g);
     });

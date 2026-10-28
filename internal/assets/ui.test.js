@@ -987,3 +987,12 @@ test("buildScene draws function cards", () => {
   const types = scene.nodes.filter((n) => n.kind === "type");
   assert.ok(fns.every((f) => types.every((t) => f.y > t.y + t.h)));
 });
+// Cards carry their position so a double-click can open the source.
+test("buildScene nodes carry a source position", () => {
+  const model = fixture();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+  const app = scene.nodes.find((n) => n.title === "App");
+  assert.equal(app.pos, "app.go:5");
+  assert.equal(typeof app.pos, "string");
+});
