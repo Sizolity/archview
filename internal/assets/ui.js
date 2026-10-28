@@ -364,8 +364,10 @@
           h: 68,
           title: short(p.path),
           sub: relPath(modelPath, p.path),
-          lines: [visible(p.types, all).length + " 类型 · " + visible(p.funcs, all).length + " 函数"],
+          lines: [visible(p.types, showsAll(p, all)).length + " 类型 · " +
+            visible(p.funcs, showsAll(p, all)).length + (p.main ? " 函数 · 程序入口" : " 函数")],
           changed: packageChanged(p),
+          entry: !!p.main,
           href: pkgHash(p.path),
           selected: false
         });
@@ -464,6 +466,13 @@
   function formatCrap(v) {
     if (v == null || !isFinite(v)) return "";
     return Number(v).toFixed(1);
+  }
+
+  // showsAll decides the exported filter per package. A program entry has no
+  // exported API by design, so hiding its unexported members would draw an
+  // empty card for the one package that holds the wiring.
+  function showsAll(p, all) {
+    return !!all || !!(p && p.main);
   }
 
   // packageChanged reports whether the -diff run touched anything inside the
@@ -885,6 +894,7 @@
     typeChanged: typeChanged,
     warningSummary: warningSummary,
     packageChanged: packageChanged,
+    showsAll: showsAll,
     buildScene: buildScene,
     edgePath: edgePath,
     applyMoved: applyMoved,

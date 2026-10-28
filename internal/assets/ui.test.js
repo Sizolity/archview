@@ -969,3 +969,9 @@ test("packageChanged sees a change anywhere in the package", () => {
   assert.equal(ui.packageChanged({ types: [{}], funcs: [{}] }), false);
   assert.equal(ui.packageChanged(null), false);
 });
+test("showsAll opens up a program entry", () => {
+  assert.equal(ui.showsAll({ main: true }, false), true);
+  assert.equal(ui.showsAll({ main: false }, false), false);
+  assert.equal(ui.showsAll({ main: false }, true), true);
+  assert.equal(ui.showsAll(null, false), false);
+});

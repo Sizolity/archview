@@ -407,6 +407,14 @@
           g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + n.rows.length * 17, class: "kind" }, "… 还有 " + n.more + " 条"));
         }
       }
+      if (n.kind === "pkg" && n.entry) {
+        g.appendChild(el("rect", {
+          x: n.x + n.w - 46, y: n.y + 7, width: 38, height: 17, rx: 8, fill: "#ecfeff", class: "entry-badge"
+        }));
+        g.appendChild(el("text", {
+          x: n.x + n.w - 27, y: n.y + 19.5, class: "entry-text", fill: "#0e7490", "text-anchor": "middle"
+        }, "入口"));
+      }
       if (n.crap != null) {
         // CRAP badge: a type is as risky as its worst method (2.3).
         var lvl = A.crapLevel(n.crap, A.crapThresholds(state.model));
@@ -532,18 +540,19 @@
       }
     }
     html += "<h3>类型</h3>";
-    var types = vis(p.types);
+    var all = A.showsAll(p, state.all);
+    var types = A.visible(p.types, all);
     if (!types.length) html += '<p class="empty">没有导出类型</p>';
     else {
       html += "<table><thead><tr><th>类型</th><th>成员</th></tr></thead><tbody>";
       types.forEach(function (t) {
         html += '<tr><td class="name"><a href="' + typeHash(t.id) + '">' + esc(t.name) + "</a> <span class=\"badge " +
           (t.kind === "interface" ? "iface" : (t.kind === "type" ? "type" : "")) + '">' + esc(t.kind) + "</span></td><td>" +
-          vis(t.fields).length + " 字段 · " + vis(t.methods).length + " 方法</td></tr>";
+          A.visible(t.fields, all).length + " 字段 · " + A.visible(t.methods, all).length + " 方法</td></tr>";
       });
       html += "</tbody></table>";
     }
-    var funcs = vis(p.funcs);
+    var funcs = A.visible(p.funcs, all);
     var metricsOn = !!state.model.metrics;
     html += "<h3>函数</h3>";
     if (!funcs.length) html += '<p class="empty">没有导出函数</p>';

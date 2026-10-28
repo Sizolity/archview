@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -91,5 +92,24 @@ func TestParsePackage(t *testing.T) {
 	}
 	if len(p.Vars) != 1 || p.Vars[0].Name != "Y" {
 		t.Fatalf("vars = %+v", p.Vars)
+	}
+}
+
+// A program entry has no exported API; the model has to say so, because the UI
+// otherwise draws it as an empty package.
+func TestMainPackageIsMarked(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadWith(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Packages) != 1 || !m.Packages[0].Main {
+		t.Fatalf("packages = %+v", m.Packages)
 	}
 }

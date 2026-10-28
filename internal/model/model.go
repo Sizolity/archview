@@ -44,6 +44,7 @@ type Module struct {
 type Package struct {
 	Path    string       `json:"path"`
 	Name    string       `json:"name"`
+	Main    bool         `json:"main,omitempty"`
 	Doc     string       `json:"doc,omitempty"`
 	Imports []string     `json:"imports,omitempty"`
 	Types   []*TypeInfo  `json:"types,omitempty"`
@@ -351,7 +352,7 @@ func parseFiles(fset *token.FileSet, lp listed) ([]*ast.File, error) {
 }
 
 func buildPackage(fset *token.FileSet, root, module string, lp listed, files []*ast.File) *Package {
-	p := &Package{Path: lp.Path, Name: lp.Name}
+	p := &Package{Path: lp.Path, Name: lp.Name, Main: lp.Name == "main"}
 	for _, imp := range lp.Imports {
 		if strings.HasPrefix(imp, module+"/") {
 			p.Imports = append(p.Imports, imp)
