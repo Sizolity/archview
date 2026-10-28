@@ -467,7 +467,7 @@
       var base = isDecl ? 34 : 54;
       var step = isDecl ? 17 : 16;
       n.rows.forEach(function (row, i) {
-        g.appendChild(el("text", { x: n.x + 12, y: n.y + base + 16 + i * step, class: "row" },
+        g.appendChild(el("text", { x: n.x + 12, y: n.y + base + (isDecl ? 16 : 0) + i * step, class: "row" },
           cut(row, isDecl ? 42 : 40)));
       });
       if (n.more > 0) {
