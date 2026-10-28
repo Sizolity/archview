@@ -61,6 +61,7 @@ type TypeInfo struct {
 	Doc      string       `json:"doc,omitempty"`
 	Pos      string       `json:"pos"`
 	End      int          `json:"end,omitempty"`
+	Text     string       `json:"text,omitempty"`
 	Exported bool         `json:"exported"`
 	Fields   []FieldInfo  `json:"fields,omitempty"`
 	Methods  []MethodInfo `json:"methods,omitempty"`
@@ -397,6 +398,8 @@ func (b *builder) parseFile(f *ast.File) {
 					if !ok {
 						continue
 					}
+					var decl bytes.Buffer
+					_ = printer.Fprint(&decl, b.fset, ts)
 					t := &TypeInfo{
 						ID:       b.pkgPath + "#" + ts.Name.Name,
 						Name:     ts.Name.Name,
@@ -404,6 +407,7 @@ func (b *builder) parseFile(f *ast.File) {
 						Doc:      firstPara(commentText(firstNonNil(ts.Doc, dd.Doc))),
 						Pos:      b.pos(ts.Pos()),
 						End:      b.line(ts.End()),
+						Text:     "type " + decl.String(),
 						Exported: ts.Name.IsExported(),
 					}
 					if st, ok := ts.Type.(*ast.StructType); ok {

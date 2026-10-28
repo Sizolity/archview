@@ -1034,3 +1034,8 @@ test("value cards show the initialiser", () => {
   assert.equal(ui.valueSub({ type: "int", value: "2" }), "var int = 2");
   assert.equal(ui.valueSub({ kind: "const", value: "3" }), "const = 3");
 });
+test("type cards prefer the declaration source, functions prefer the doc", () => {
+  assert.equal(ui.docLine("A is a type.\nMore."), "A is a type.");
+  assert.equal(ui.docLine(""), "");
+  assert.deepEqual(ui.textRows("type T struct {\n\tA int\n}"), ["type T struct {", "  A int", "}"]);
+});

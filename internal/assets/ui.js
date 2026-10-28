@@ -378,6 +378,19 @@
     return nodes;
   }
 
+  // docLine is the first line of a doc comment, or "" when there is none.
+  function docLine(doc) {
+    var s = String(doc || "").trim();
+    if (!s) return "";
+    var i = s.indexOf("\n");
+    return i < 0 ? s : s.slice(0, i);
+  }
+
+  // textRows turns a printed declaration into card rows: the source is what a
+  // reader wants on a type card, and the row cap already elides the rest.
+  function textRows(text) {
+    return String(text || "").split("\n").map(function (l) { return l.replace(/\t/g, "  "); });
+  }
   function typeRows(t, all) {
     var rows = [];
     visible(t.fields, all).forEach(function (f) {
@@ -592,7 +605,7 @@
 
     var cards = types.map(function (t) {
       var folded = declutter || collapsed.indexOf(t.id) >= 0;
-      var rows = folded ? [] : typeRows(t, all);
+      var rows = folded ? [] : (t.text ? textRows(t.text) : typeRows(t, all));
       var shown = rows.slice(0, 7);
       var more = rows.length - shown.length;
       var h = folded ? 44 : 30 + Math.max(1, shown.length) * 17 + (more > 0 ? 17 : 0) + 12;
@@ -678,7 +691,7 @@
           w: CARD_W,
           h: 60,
           title: f.name,
-          sub: f.sig,
+          sub: docLine(f.doc) || f.sig,
           pos: f.pos,
           crap: f.metrics ? f.metrics.crap : null,
           changed: !!f.changed,
@@ -960,6 +973,8 @@
     crapThresholds: crapThresholds,
     formatCrap: formatCrap,
     typeCrap: typeCrap,
+    docLine: docLine,
+    textRows: textRows,
     typeChanged: typeChanged,
     warningSummary: warningSummary,
     packageChanged: packageChanged,

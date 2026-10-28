@@ -8,6 +8,9 @@ workflow.
 
 ## Unreleased
 
+- Type cards show the printed declaration (	ype Server struct { … }), and
+  function cards show their doc comment, falling back to the signature.
+
 ## [0.4.0] - 2026-10-29
 
 ### Added
