@@ -12,8 +12,6 @@
 })(typeof globalThis === "object" ? globalThis : this, function () {
   "use strict";
 
-  var COLS = 3;
-
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -355,6 +353,38 @@
 
   // ---------- cards ----------
 
+  // Cards are sized from their own text and rows, not from a fixed grid cell:
+  // a long signature needs a wider box, a card with more rows is taller, and a
+  // folded card shrinks to its title. There are no font metrics in a pure
+  // module, so the estimate is a deterministic character-width approximation;
+  // the layout then uses these same w/h values for every overlap and port
+  // decision, so an estimate only has to be self-consistent.
+  var CARD_MIN_W = 200;
+  var CARD_MAX_W = 380;
+  var CARD_TEXT_PAD = 26;
+
+  function textWidth(text, px) {
+    var s = String(text == null ? "" : text);
+    var w = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c === 9) w += px * 2;
+      else if (c < 32) continue;
+      else if (c < 128) w += px * 0.58;
+      else w += px;
+    }
+    return w;
+  }
+
+  function cardWidth(n) {
+    var w = textWidth(n.title, 13) * 1.08; // the title is bold
+    w = Math.max(w, textWidth(n.sub, 11));
+    (n.rows || []).forEach(function (row) { w = Math.max(w, textWidth(row, 10.5)); });
+    // Keep room for the entry / CRAP badges beside a short title.
+    if (n.entry || n.crap != null) w = Math.max(w, 130);
+    return Math.min(CARD_MAX_W, Math.max(CARD_MIN_W, Math.ceil(w) + CARD_TEXT_PAD));
+  }
+
   // buildCard is the one place a canvas card is assembled. Every field the
   // renderer knows about is defaulted here, so a capability added once reaches
   // all four card kinds instead of being patched into each layout function.
@@ -388,7 +418,7 @@
       href: "#/",
       drillHref: "",
       pos: "",
-      w: CARD_W,
+      w: CARD_MIN_W,
       h: 60
     };
 
@@ -409,7 +439,7 @@
       node.entry = !!decl.main;
       node.selected = opts.selected === node.id;
       node.h = opts.h || 68;
-      node.w = opts.w || 240;
+      node.w = opts.w || cardWidth(node);
       return node;
     }
 
@@ -447,7 +477,7 @@
     node.pos = decl.pos || "";
     node.drillHref = editorHref(opts.editor, opts.root, node.pos);
     node.selected = opts.selected === node.id;
-    if (opts.w) node.w = opts.w;
+    node.w = opts.w || cardWidth(node);
     if (opts.h) node.h = opts.h;
     return node;
   }
@@ -460,63 +490,289 @@
   function packageCard(p, opts) { return buildCard("pkg", p, p, opts); }
 
   // ---------- layout ----------
+  //
+  // A scene is laid out by one engine, and it always flows top to bottom:
+  //
+  //   1. assignLayers breaks cycles by depth-first back-edge detection and
+  //      gives every card the longest path from a root over the remaining
+  //      edges, so every non-back edge advances a layer;
+  //   2. orderLayers runs four deterministic barycenter passes over those
+  //      edges, with the declaration ID as the final tie-break;
+  //   3. placeLayers sizes the variable cards, centres every layer, and widens
+  //      the vertical gutter until every edge falls further than it runs.
+  //
+  // There is no axis option: `scene.axis` is the constant "v" and edgeRoute has
+  // no horizontal branch to fall back on.
 
-  // flowAxis is the one decision that fixes the direction of a scene:
-  // package columns and the kind grid read left to right, the dependency
-  // layered layout reads top to bottom. buildScene passes the result to every
-  // layout function, so no later stage can quietly pick a different flow.
-  function flowAxis(kind, layout) {
-    if (kind === "packages") return "h";
-    return layoutMode(layout) === "kind" ? "h" : "v";
+  var FLOW_AXIS = "v";
+  var MARGIN = 40;
+  var GAP_X = 40;
+  var GAP_Y = 72;
+  var ORDER_PASSES = 4;
+
+  function cmpID(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+
+  function pairKey(from, to) { return from + "\u0000" + to; }
+
+  // assignLayers returns {layer, back}. The DFS starts at the indegree-zero
+  // nodes in declaration-id order and then at every remaining node in that
+  // order; an edge into the current DFS stack is a back edge and is removed
+  // before ranking. The remaining graph is acyclic, so the longest-path
+  // relaxation reaches a fixed point (and cannot run away on a cycle).
+  function assignLayers(nodes, edges) {
+    var ids = nodes.map(function (n) { return n.id; });
+    var inSet = Object.create(null);
+    ids.forEach(function (id) { inSet[id] = true; });
+
+    var out = Object.create(null);
+    var indeg = Object.create(null);
+    var seen = Object.create(null);
+    var pairs = [];
+    ids.forEach(function (id) { indeg[id] = 0; });
+    (edges || []).forEach(function (e) {
+      if (!inSet[e.from] || !inSet[e.to] || e.from === e.to) return;
+      var k = pairKey(e.from, e.to);
+      if (seen[k]) return;
+      seen[k] = true;
+      pairs.push({ from: e.from, to: e.to });
+      (out[e.from] = out[e.from] || []).push(e.to);
+      indeg[e.to]++;
+    });
+    Object.keys(out).forEach(function (id) { out[id].sort(cmpID); });
+
+    var ordered = ids.slice().sort(cmpID);
+    var roots = ordered.filter(function (id) { return !indeg[id]; });
+
+    var color = Object.create(null);
+    var back = Object.create(null);
+    function visit(id) {
+      color[id] = 1;
+      (out[id] || []).forEach(function (next) {
+        if (color[next] === 1) back[pairKey(id, next)] = true;
+        else if (!color[next]) visit(next);
+      });
+      color[id] = 2;
+    }
+    roots.forEach(function (id) { if (!color[id]) visit(id); });
+    ordered.forEach(function (id) { if (!color[id]) visit(id); });
+
+    var kept = pairs.filter(function (p) { return !back[pairKey(p.from, p.to)]; });
+    var layer = Object.create(null);
+    ids.forEach(function (id) { layer[id] = 0; });
+    for (var round = 0; round <= ids.length; round++) {
+      var changed = false;
+      kept.forEach(function (p) {
+        if (layer[p.to] < layer[p.from] + 1) {
+          layer[p.to] = layer[p.from] + 1;
+          changed = true;
+        }
+      });
+      if (!changed) break;
+    }
+    return { layer: layer, back: back };
   }
 
-  // layoutPackages puts a package in the column of its import depth: a
-  // package sits one column right of everything it imports. The layer is the
-  // depth, so every node in a layer shares the flow coordinate (`x` for the
-  // horizontal flow this view always uses).
+  // rankTypes is the public view of the layer step. The back-edge table stays
+  // internal to layoutGraph, which marks the scene's own edge objects.
+  function rankTypes(nodes, edges) {
+    return assignLayers(nodes, edges).layer;
+  }
+
+  // assignX sizes every column from its widest card and centres each layer on
+  // the same axis. It returns each card's centre x, which is the coordinate the
+  // ordering pass compares across layers (edges may skip a layer, so an
+  // in-layer index would compare the wrong things).
+  function assignX(layers) {
+    var maxCols = 0;
+    layers.forEach(function (list) { if (list.length > maxCols) maxCols = list.length; });
+    var colW = [];
+    var i;
+    for (i = 0; i < maxCols; i++) colW.push(0);
+    layers.forEach(function (list) {
+      list.forEach(function (n, at) {
+        if (n.w > colW[at]) colW[at] = n.w;
+      });
+    });
+
+    var totalW = 0;
+    var left = [];
+    for (i = 0; i < maxCols; i++) {
+      left.push(MARGIN + totalW);
+      totalW += colW[i] + (i ? GAP_X : 0);
+    }
+
+    var centre = new Map();
+    layers.forEach(function (list, li) {
+      var usedW = 0;
+      for (var j = 0; j < list.length; j++) usedW += colW[j] + (j ? GAP_X : 0);
+      var offset = (totalW - usedW) / 2;
+      list.forEach(function (n, at) {
+        // Centre the card inside its column too: a narrow card should not hug
+        // the gutter of a column sized by a wider card elsewhere.
+        n.x = Math.round(left[at] + offset + (colW[at] - n.w) / 2);
+        n.layer = li;
+        centre.set(n.id, n.x + n.w / 2);
+      });
+    });
+    return centre;
+  }
+
+  // orderLayers runs four barycenter passes (down, up, down, up). A layer is
+  // ordered by the average centre x of the cards it connects to, including
+  // edges that skip a layer; a card without a neighbour keeps its current x,
+  // so an unrelated layer cannot reorder. Every comparison ends with the
+  // declaration ID, making the result independent of sort stability.
+  function orderLayers(layers, pred, succ) {
+    var max = layers.length - 1;
+    var centre = assignX(layers);
+    for (var pass = 0; pass < ORDER_PASSES; pass++) {
+      var down = pass % 2 === 0;
+      var seq = [];
+      var l;
+      if (down) { for (l = 1; l <= max; l++) seq.push(l); }
+      else { for (l = max - 1; l >= 0; l--) seq.push(l); }
+      seq.forEach(function (li) {
+        var keyed = layers[li].map(function (n) {
+          var sum = 0, count = 0;
+          (down ? pred.get(n.id) : succ.get(n.id)).forEach(function (id) {
+            if (!centre.has(id)) return;
+            sum += centre.get(id);
+            count++;
+          });
+          return { node: n, bary: count ? sum / count : centre.get(n.id) };
+        });
+        keyed.sort(function (a, b) {
+          if (a.bary !== b.bary) return a.bary - b.bary;
+          return cmpID(a.node.id, b.node.id);
+        });
+        layers[li] = keyed.map(function (k) { return k.node; });
+        // Recompute x after every layer: later layers in this pass see the
+        // updated ordering, and no two passes share stale coordinates.
+        centre = assignX(layers);
+      });
+    }
+    return layers;
+  }
+
+  // placeLayers gives the ordered layers boxes. assignX has already centred
+  // each layer; this adds the vertical coordinate. Each layer is as tall as its
+  // tallest card, and the gap between two layers grows for edges that run far
+  // horizontally, which is what keeps |dy| > |dx| a structural property of the
+  // layout instead of a property of the sample.
+  function placeLayers(layers, edges, byId) {
+    assignX(layers);
+    var i;
+
+    var heights = layers.map(function (list) {
+      var h = 0;
+      list.forEach(function (n) { if (n.h > h) h = n.h; });
+      return h;
+    });
+
+    var gaps = [];
+    var maxLayer = layers.length - 1;
+    for (i = 0; i < maxLayer; i++) gaps.push(GAP_Y);
+    edges.forEach(function (e) {
+      var a = byId.get(e.from);
+      var b = byId.get(e.to);
+      if (!a || !b || a.layer === b.layer) return;
+      var dx = Math.abs((b.x + b.w / 2) - (a.x + a.w / 2));
+      var lo = Math.min(a.layer, b.layer);
+      var hi = Math.max(a.layer, b.layer);
+      var need = Math.ceil(dx) + 1;
+      for (var k = lo; k < hi; k++) {
+        if (gaps[k] < need) gaps[k] = need;
+      }
+    });
+
+    var y = MARGIN;
+    layers.forEach(function (list, li) {
+      list.forEach(function (n) { n.y = y; });
+      y += heights[li] + (gaps[li] || 0);
+    });
+    return layers;
+  }
+
+  // layoutGraph is the only layout entry point used by buildScene. It mutates
+  // the cards with x/y/layer, marks back edges on the scene's own edge objects,
+  // and rewrites nodes into draw order (layer, then in-layer order).
+  function layoutGraph(nodes, edges) {
+    var byId = new Map();
+    nodes.forEach(function (n) { byId.set(n.id, n); });
+    var usable = (edges || []).filter(function (e) {
+      return byId.has(e.from) && byId.has(e.to);
+    });
+    var res = assignLayers(nodes, usable);
+    usable.forEach(function (e) {
+      if (e.from === e.to || res.back[pairKey(e.from, e.to)]) e.back = true;
+      else delete e.back;
+    });
+
+    var pred = new Map();
+    var succ = new Map();
+    nodes.forEach(function (n) {
+      pred.set(n.id, []);
+      succ.set(n.id, []);
+    });
+    usable.forEach(function (e) {
+      if (e.from === e.to || res.back[pairKey(e.from, e.to)]) return;
+      if (succ.get(e.from).indexOf(e.to) >= 0) return;
+      succ.get(e.from).push(e.to);
+      pred.get(e.to).push(e.from);
+    });
+    pred.forEach(function (list) { list.sort(cmpID); });
+    succ.forEach(function (list) { list.sort(cmpID); });
+
+    var maxLayer = 0;
+    nodes.forEach(function (n) {
+      n.layer = res.layer[n.id] || 0;
+      if (n.layer > maxLayer) maxLayer = n.layer;
+    });
+    var layers = [];
+    for (var l = 0; l <= maxLayer; l++) layers.push([]);
+    nodes.forEach(function (n) { layers[n.layer].push(n); });
+    layers.forEach(function (list) {
+      list.sort(function (a, b) { return cmpID(a.id, b.id); });
+    });
+
+    orderLayers(layers, pred, succ);
+    placeLayers(layers, usable, byId);
+
+    var flat = [];
+    layers.forEach(function (list) {
+      list.forEach(function (n) { flat.push(n); });
+    });
+    nodes.length = 0;
+    flat.forEach(function (n) { nodes.push(n); });
+    return nodes;
+  }
+
+  // packageEdges is the import-edge list layoutPackages uses when the caller
+  // does not already have the scene's edge objects (buildScene does; the
+  // direct layout test does not).
+  function packageEdges(pkgs, pkgByPath) {
+    var edges = [];
+    pkgs.forEach(function (p) {
+      (p.imports || []).forEach(function (imp) {
+        if (pkgByPath.has(imp)) edges.push({ from: p.path, to: imp, ref: false });
+      });
+    });
+    return edges;
+  }
+
+  // layoutPackages puts packages in longest-import-path layers: a package sits
+  // one layer below everything it imports. The scene passes its own edge
+  // objects, so a call-only edge participates in layering and can be marked
+  // back on the same object that drawEdges later renders.
   function layoutPackages(pkgs, pkgByPath, opts) {
     opts = opts || {};
     var all = !!opts.all;
     var modelPath = opts.modelPath || "";
-    var axis = opts.axis === "v" ? "v" : "h";
-
-    var depth = new Map();
-    pkgs.forEach(function (p) { depth.set(p.path, 0); });
-    for (var round = 0; round < pkgs.length; round++) {
-      pkgs.forEach(function (p) {
-        (p.imports || []).forEach(function (imp) {
-          var q = pkgByPath.get(imp);
-          if (!q) return;
-          depth.set(p.path, Math.max(depth.get(p.path), depth.get(q.path) + 1));
-        });
-      });
-    }
-
-    var cols = new Map();
-    pkgs.forEach(function (p) {
-      var d = depth.get(p.path);
-      if (!cols.has(d)) cols.set(d, []);
-      cols.get(d).push(p);
-    });
-
-    var nodes = [];
-    var ds = Array.from(cols.keys()).sort(function (a, b) { return a - b; });
-    ds.forEach(function (d) {
-      var list = cols.get(d).slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
-      list.forEach(function (p, i) {
-        var n = packageCard(p, { modelPath: modelPath, all: all, selected: opts.selected || "" });
-        if (axis === "h") {
-          n.x = 40 + d * 320;
-          n.y = 40 + i * 96;
-        } else {
-          n.x = 40 + i * 320;
-          n.y = 40 + d * 96;
-        }
-        n.layer = d;
-        nodes.push(n);
-      });
-    });
-    return nodes;
+    var cards = pkgs.map(function (p) {
+      return packageCard(p, { modelPath: modelPath, all: all, selected: opts.selected || "" });
+    }).sort(function (a, b) { return cmpID(a.id, b.id); });
+    layoutGraph(cards, opts.edges || packageEdges(pkgs, pkgByPath));
+    return cards;
   }
 
   // docLine is the first line of a doc comment, or "" when there is none.
@@ -670,57 +926,16 @@
 
   // ---------- type layout ----------
 
-  var LAYOUTS = ["layer", "kind"];
-  var CARD_W = 290;
-  var PER_ROW = 4;
-
-  function layoutMode(v) {
-    return LAYOUTS.indexOf(v) >= 0 ? v : "layer";
-  }
-
-  // rankTypes walks the edges until the ranks stop moving: a type that is used
-  // by another sits above it, so dependencies end up at the bottom. Cycles are
-  // bounded by the number of types.
-  function rankTypes(types, edges) {
-    var rank = {};
-    types.forEach(function (t) { rank[t.id] = 0; });
-    for (var round = 0; round < types.length; round++) {
-      var changed = false;
-      edges.forEach(function (e) {
-        if (!(e.from in rank) || !(e.to in rank)) return;
-        if (rank[e.to] < rank[e.from] + 1) {
-          rank[e.to] = rank[e.from] + 1;
-          changed = true;
-        }
-      });
-      if (!changed) break;
-    }
-    return rank;
-  }
-
-  // layoutTypes places the type cards. The axis decides the layer shape:
-  //
-  //   "v" — one band per dependency depth, users on top, dependencies below,
-  //         four cards per line; every node in a band shares `y` and its
-  //         `layer` is the row index;
-  //   "h" — the old grid, grouped struct → interface → type, one layer per
-  //         column; every node in a layer shares `x`.
-  //
-  // Function and value bands continue the same layer numbering, so a call
-  // between two cards in one function row is a same-layer edge in both axes.
-  // Folded cards keep only their title, which is a view state: the model is
-  // untouched.
-  function layoutTypes(pkg, types, opts) {
+  // packageCards assembles every card a package view can draw: types,
+  // package-level functions and constants/variables. buildCard owns their text
+  // and size; this function only decides membership and view state.
+  function packageCards(pkg, types, opts) {
     opts = opts || {};
     var all = !!opts.all;
     var selected = opts.selected || null;
     var collapsed = opts.collapsed || [];
     var expanded = opts.expanded || [];
-    var axis = opts.axis === "v" || opts.axis === "h"
-      ? opts.axis : (layoutMode(opts.layout) === "kind" ? "h" : "v");
-    var edges = opts.edges || [];
     var cardOpts = { all: all, selected: selected, editor: opts.editor, root: opts.root };
-
     var cards = types.map(function (t) {
       return typeCard(t, pkg, {
         all: all,
@@ -731,93 +946,24 @@
         root: opts.root
       });
     });
-
-    var kindOf = {};
-    types.forEach(function (t) { kindOf[t.id] = t.kind; });
-
-    var placed = [];
-    var nextLayer = 0;
-    if (axis === "h") {
-      var kindOrder = { struct: 0, interface: 1, type: 2 };
-      var sorted = cards.slice().sort(function (a, b) {
-        var ka = kindOrder[kindOf[a.id]], kb = kindOrder[kindOf[b.id]];
-        if (ka === undefined) ka = 3;
-        if (kb === undefined) kb = 3;
-        if (ka !== kb) return ka - kb;
-        return a.title.localeCompare(b.title);
-      });
-      var ys = [];
-      for (var c = 0; c < COLS; c++) ys.push(40);
-      sorted.forEach(function (card, i) {
-        var col = i % COLS;
-        placed.push({ card: card, x: 40 + col * (CARD_W + 40), y: ys[col], layer: col });
-        ys[col] += card.h + 26;
-      });
-    } else {
-      var rank = rankTypes(types, edges);
-      var bands = {};
-      cards.forEach(function (card) {
-        var r = rank[card.id] || 0;
-        (bands[r] = bands[r] || []).push(card);
-      });
-      var y = 40;
-      Object.keys(bands).map(Number).sort(function (a, b) { return a - b; }).forEach(function (r) {
-        var list = bands[r].sort(function (a, b) { return a.title.localeCompare(b.title); });
-        for (var i = 0; i < list.length; i += PER_ROW) {
-          var chunk = list.slice(i, i + PER_ROW);
-          var maxH = 0;
-          chunk.forEach(function (card, k) {
-            placed.push({ card: card, x: 40 + k * (CARD_W + 40), y: y, layer: nextLayer });
-            if (card.h > maxH) maxH = card.h;
-          });
-          nextLayer++;
-          y += maxH + 24;
-        }
-        y += 24; // gap between dependency depths
-      });
-    }
-
-    var nodes = placed.map(function (p) {
-      p.card.x = p.x;
-      p.card.y = p.y;
-      p.card.layer = p.layer;
-      return p.card;
+    visible(pkg.funcs || [], showsAll(pkg, all)).forEach(function (f) {
+      cards.push(funcCard(f, pkg, cardOpts));
     });
+    visible(valuesOf(pkg), showsAll(pkg, all)).forEach(function (v) {
+      cards.push(valueCard(v, pkg, cardOpts));
+    });
+    return cards;
+  }
 
-    // Function band: package-level functions are nodes too. Go packages are
-    // often functions-only (a command, a helpers package), and drawing an empty
-    // canvas made those look broken. They sit under the types, four per row in
-    // a vertical flow and four per column in a horizontal one.
-    var fns = visible(pkg.funcs || [], showsAll(pkg, all));
-    // bandY is computed even when there are no functions: the value band below
-    // uses it too, and an undefined base turned every coordinate into NaN.
-    var bandY = 40;
-    nodes.forEach(function (n) { bandY = Math.max(bandY, n.y + n.h + 56); });
-    if (fns.length) {
-      var fnLayer = nextLayer;
-      fns.forEach(function (f, i) {
-        var n = funcCard(f, pkg, cardOpts);
-        n.x = 40 + (i % PER_ROW) * (CARD_W + 40);
-        n.y = bandY + Math.floor(i / PER_ROW) * 76;
-        n.layer = axis === "h" ? (i % PER_ROW) : (fnLayer + Math.floor(i / PER_ROW));
-        nodes.push(n);
-      });
-      if (axis === "v") nextLayer = fnLayer + Math.ceil(fns.length / PER_ROW);
-    }
-    // Value band: an embed or constant package holds no types and no functions,
-    // so it used to draw an empty canvas. Its consts/vars get cards too.
-    var values = visible(valuesOf(pkg), showsAll(pkg, all));
-    if (values.length) {
-      var valueY = fns.length ? bandY + Math.ceil(fns.length / PER_ROW) * 76 : bandY;
-      values.forEach(function (v, i) {
-        var n = valueCard(v, pkg, cardOpts);
-        n.x = 40 + (i % PER_ROW) * (CARD_W + 40);
-        n.y = valueY + Math.floor(i / PER_ROW) * 76;
-        n.layer = axis === "h" ? (i % PER_ROW) : (nextLayer + Math.floor(i / PER_ROW));
-        nodes.push(n);
-      });
-    }
-    return nodes;
+  // layoutTypes is the package-view convenience entry: build its cards and run
+  // the same vertical engine buildScene uses. `edges` are the dependency edges
+  // of the view (uses/implements/embeds/calls); buildScene passes the complete
+  // list so call edges affect layers when they are shown.
+  function layoutTypes(pkg, types, opts) {
+    opts = opts || {};
+    var cards = packageCards(pkg, types, opts);
+    layoutGraph(cards, opts.edges || []);
+    return cards;
   }
 
   // typePairs lists the reference edges between the given types, deduplicated
@@ -889,23 +1035,17 @@
 
   // buildScene turns a model and a route into everything draw() needs. It is
   // pure: same model, route and options give the same scene. view carries the
-  // current view state: {collapsed, expanded, layout, calls, query, moved} plus
-  // the home view's selected package.
+  // current view state: {collapsed, expanded, calls, query, moved} plus the
+  // home view's selected package. There is no layout or axis choice: every
+  // scene is top-down.
   function buildScene(model, idx, route, all, view) {
     view = view || {};
     if (isHome(idx, route)) {
       var pkgs = model.packages.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
       var selected = view.selected || "";
       if (selected && !idx.pkgByPath.has(selected)) selected = "";
-      // The module view has one selection: the card the reader clicked. It is
-      // separate from the route, which only changes on a double-click.
-      var axis = flowAxis("packages", null);
-      var nodes = layoutPackages(pkgs, idx.pkgByPath, {
-        modelPath: model.path,
-        all: all,
-        selected: selected,
-        axis: axis
-      });
+      // Edges first: layering consumes exactly the edges that drawEdges draws,
+      // including the cross-package call-only edges.
       var edges = [];
       pkgs.forEach(function (p) {
         (p.imports || []).forEach(function (imp) {
@@ -936,6 +1076,14 @@
         callPairs[k] = true;
         edges.push({ from: from, to: to, ref: false, callOnly: true });
       });
+      // The module view has one selection: the card the reader clicked. It is
+      // separate from the route, which only changes on a double-click.
+      var nodes = layoutPackages(pkgs, idx.pkgByPath, {
+        modelPath: model.path,
+        all: all,
+        selected: selected,
+        edges: edges
+      });
       // 3.3: while searching, everything that does not match fades back.
       if (view.query) {
         var matchedPkgs = matchTypeIDs(searchHits(model, view.query, all));
@@ -946,7 +1094,7 @@
         });
       }
       applyMoved(nodes, view.moved);
-      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: axis, selected: selected };
+      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: FLOW_AXIS, selected: selected };
     }
 
     var pkg;
@@ -978,24 +1126,22 @@
       ? route.id
       : null;
 
-    // Relation pairs are needed before layout (3.1 ranks by them) and again
-    // for drawing, so they are computed once.
-    var pairs = typePairs(types, idx);
-    var axis = flowAxis("types", view.layout);
-    var tnodes = layoutTypes(pkg, types, {
+    // Cards and the complete edge list are built before layout: a call edge
+    // included in the scene must also shape the layers when it is shown.
+    var tnodes = packageCards(pkg, types, {
       expanded: view.expanded,
       all: all,
       selected: selectedID,
       collapsed: view.collapsed,
-      layout: view.layout,
-      axis: axis,
-      edges: pairs,
       editor: model.editor,
       root: model.root
     });
     var byId = new Map();
     tnodes.forEach(function (n) { byId.set(n.id, n); });
 
+    // Relation pairs are needed before layout (they are the layer constraints)
+    // and again for drawing, so they are computed once.
+    var pairs = typePairs(types, idx);
     var tedges = pairs.filter(function (e) {
       return byId.has(e.from) && byId.has(e.to);
     });
@@ -1015,6 +1161,8 @@
       tedges = tedges.concat(callEdges(model.calls, pkg, byId));
     }
 
+    layoutGraph(tnodes, tedges);
+
     if (view.query) {
       var matched = matchTypeIDs(searchHits(model, view.query, all));
       tnodes.forEach(function (n) {
@@ -1029,7 +1177,7 @@
       edges: tedges,
       pkg: pkg,
       selected: selectedID,
-      axis: axis
+      axis: FLOW_AXIS
     };
     applyMoved(scene.nodes, view.moved);
     return scene;
@@ -1367,88 +1515,36 @@
 
   // ---------- geometry ----------
 
-  // edgeRoute is the routing contract: two boxes and the scene axis in, one
-  // concrete route out. It is the only place that decides which border an edge
-  // uses, and it guarantees three things the renderer relies on:
+  // edgeRoute is the routing contract: every edge leaves the source's bottom
+  // border at its centreline and enters the target's top border at its
+  // centreline. Both control points sit outside the boxes (below the source,
+  // above the target), so the tangent approaches the target from outside and
+  // the arrowhead is never painted inside the card. A back edge is the same
+  // port pair pointing up: it is a loop, not a second direction.
   //
-  //   * both endpoints sit exactly on a border, at that border's centreline;
-  //   * the route leaves the source and approaches the target from outside, so
-  //     the arrowhead is never painted inside its own card;
-  //   * flow-layer edges use the flow ports (bottom→top for "v", right→left for
-  //     "h"); edges between two boxes in the same layer use the cross ports
-  //     (side→side for "v", top/bottom for "h") instead of doubling back
-  //     through the target. A same-layer flow-port edge is the diagonal bug.
-  //
-  // "flow" is the coordinate the axis advances on (y for "v", x for "h");
-  // "cross" is the coordinate inside one layer. Every branch below only swaps
-  // those two roles, so there is one algorithm, not a vertical copy and a
-  // horizontal copy.
-  function edgeRoute(a, b, axis) {
-    var vertical = axis !== "h";
-    var aFlow = vertical ? a.y : a.x, aFlowSize = vertical ? a.h : a.w;
-    var bFlow = vertical ? b.y : b.x, bFlowSize = vertical ? b.h : b.w;
-    var aCross = vertical ? a.x : a.y, aCrossSize = vertical ? a.w : a.h;
-    var bCross = vertical ? b.x : b.y, bCrossSize = vertical ? b.w : b.h;
-    var aFlowMid = aFlow + aFlowSize / 2, bFlowMid = bFlow + bFlowSize / 2;
-    var aCrossMid = aCross + aCrossSize / 2, bCrossMid = bCross + bCrossSize / 2;
-    // Overlapping flow intervals mean the two cards share a layer.
-    var intra = aFlow < bFlow + bFlowSize - 1 && bFlow < aFlow + aFlowSize - 1;
-
-    function point(flow, cross) {
-      return vertical ? { x: cross, y: flow } : { x: flow, y: cross };
-    }
-
-    var startFlow, endFlow, startCross, endCross, startSide, endSide;
-    if (intra) {
-      // Same layer: run along the cross axis, from the facing sides.
-      var positive = bCrossMid >= aCrossMid;
-      startFlow = aFlowMid;
-      endFlow = bFlowMid;
-      startCross = positive ? aCross + aCrossSize : aCross;
-      endCross = positive ? bCross : bCross + bCrossSize;
-      startSide = vertical ? (positive ? "right" : "left") : (positive ? "bottom" : "top");
-      endSide = vertical ? (positive ? "left" : "right") : (positive ? "top" : "bottom");
-    } else {
-      // Different layers: run along the flow axis, at the centreline.
-      var forward = bFlowMid >= aFlowMid;
-      startFlow = forward ? aFlow + aFlowSize : aFlow;
-      endFlow = forward ? bFlow : bFlow + bFlowSize;
-      startCross = aCrossMid;
-      endCross = bCrossMid;
-      startSide = vertical ? (forward ? "bottom" : "top") : (forward ? "right" : "left");
-      endSide = vertical ? (forward ? "top" : "bottom") : (forward ? "left" : "right");
-    }
-
-    var start = point(startFlow, startCross);
-    var end = point(endFlow, endCross);
-    var c1, c2;
-    if (intra) {
-      // Controls share each end's flow coordinate and meet in the cross gap.
-      var midCross = (startCross + endCross) / 2;
-      c1 = point(startFlow, midCross);
-      c2 = point(endFlow, midCross);
-    } else {
-      // Controls share each end's cross coordinate and meet in the flow gap.
-      var midFlow = (startFlow + endFlow) / 2;
-      c1 = point(midFlow, startCross);
-      c2 = point(midFlow, endCross);
-    }
-
+  // There is no axis argument. The layer engine guarantees that two connected
+  // cards are never in the same layer, so there is no same-row case that would
+  // need a horizontal fallback; adding one back would recreate the bug.
+  function edgeRoute(a, b) {
+    var sx = a.x + a.w / 2, sy = a.y + a.h;
+    var ex = b.x + b.w / 2, ey = b.y;
+    var dy = ey - sy;
+    var off = Math.max(12, Math.min(56, Math.abs(dy) * 0.35));
+    var c1 = { x: sx, y: sy + off };
+    var c2 = { x: ex, y: ey - off };
     return {
-      axis: vertical ? "v" : "h",
-      intra: intra,
-      start: { x: start.x, y: start.y, side: startSide },
-      end: { x: end.x, y: end.y, side: endSide },
+      start: { x: sx, y: sy, side: "bottom" },
+      end: { x: ex, y: ey, side: "top" },
       c1: c1,
       c2: c2,
-      d: "M" + start.x + "," + start.y + " C" + c1.x + "," + c1.y +
-        " " + c2.x + "," + c2.y + " " + end.x + "," + end.y
+      d: "M" + sx + "," + sy + " C" + c1.x + "," + c1.y +
+        " " + c2.x + "," + c2.y + " " + ex + "," + ey
     };
   }
 
   // edgePath keeps the original string API; the route owns the geometry.
-  function edgePath(a, b, axis) {
-    return edgeRoute(a, b, axis).d;
+  function edgePath(a, b) {
+    return edgeRoute(a, b).d;
   }
 
   // applyMoved drops the positions a user dragged onto the freshly laid out
@@ -1519,11 +1615,12 @@
     funcCard: funcCard,
     valueCard: valueCard,
     packageCard: packageCard,
+    packageCards: packageCards,
     layoutPackages: layoutPackages,
-    flowAxis: flowAxis,
-    typeRows: typeRows,
     layoutTypes: layoutTypes,
+    layoutGraph: layoutGraph,
     rankTypes: rankTypes,
+    typeRows: typeRows,
     typePairs: typePairs,
     callEdges: callEdges,
     toggleCollapsed: toggleCollapsed,

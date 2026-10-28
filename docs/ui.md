@@ -1,108 +1,128 @@
-# Browser UI: axis, components, and the invariants that hold them
+# Browser UI: one flow direction, one layered layout
 
-This note records the contract that the canvas UI now enforces. It exists
-because a real bug slipped through: in a layered package view, two function
-cards sat in one horizontal row while the edge between them was routed as a
-vertical flow, so the path left one card's bottom and entered the other card's
-top from inside the card. The line ran diagonally across the row and the
-arrowhead was hidden at the corner.
+The old package view placed cards on a fixed four-per-row grid. Card
+neighbours in one row were therefore joined by horizontal lines while other
+edges ran vertically: one view had two flow directions. The fix is not another
+grid offset. Every view now flows top to bottom, and the layer engine makes
+that a structural property of the scene.
 
-The fix is a single routing contract, not adjusted coordinates. The tests that
-guard it live in `internal/assets/ui.test.js` and are named in each section
-below.
+## The contract
 
-## The axis contract
+- `scene.axis` is the constant `"v"`. There is no `flowAxis`, no `opts.axis`
+  and no layout selector: nothing can choose a direction. The field stays on
+  the scene so existing consumers can assert the contract, but no code branches
+  on it.
+- `edgeRoute(a, b)` takes two boxes and no axis. It always leaves the source's
+  bottom border at its centreline and enters the target's top border at its
+  centreline; both control points are outside the boxes, so the arrowhead
+  approaches from outside.
+- Layers come from the dependency graph, not from a row width. `layer(to) >
+  layer(from)` for every non-back edge, including `uses`/`implements`/`embeds`
+  and, when the 调用边 box is ticked, call edges.
 
-`buildScene` (in `ui.js`) makes exactly one flow decision per scene, through
-`flowAxis(kind, layout)`:
+## Layout algorithm
 
-| Scene | `flowAxis` | Layer coordinate | Flow ports | Cross ports |
-| --- | --- | --- | --- | --- |
-| module view (`packages`) | `"h"` | `x` (import depth) | right → left | top/bottom |
-| package view, `layer` layout | `"v"` | `y` (dependency band) | bottom → top | left/right |
-| package view, `kind` layout | `"h"` | `x` (kind column) | right → left | top/bottom |
+`buildScene` builds the cards and the complete edge list first, then calls
+`layoutGraph(nodes, edges)`. The engine has three steps.
 
-The decision is passed *into* the layout functions and is carried on the scene
-as `scene.axis`; the page never re-derives it. Two consequences follow:
+### 1. Layers and back edges
 
-- **Layout owns positions and layers.** Every node gets an integer `layer`.
-  In a vertical scene every node in a layer shares `y`; in a horizontal scene
-  every node in a layer shares `x`. `layoutPackages` uses import depth as its
-  layer; `layoutTypes` uses row bands in a vertical flow and kind columns in a
-  horizontal one. Function and value bands continue the same numbering, so a
-  function row is one layer and a horizontal call between two functions is a
-  same-layer edge.
-- **Routing owns ports.** `edgeRoute(a, b, axis)` treats `flow` as the
-  coordinate the axis advances on (`y` for `"v"`, `x` for `"h"`) and `cross` as
-  the coordinate inside a layer (`x` for `"v"`, `y` for `"h"`). It has one
-  algorithm with two cases:
-  - *different layers*: leave/enter on the flow ports at the border centreline
-    (bottom → top for `"v"`, right → left for `"h"`, reversed when the target is
-    behind the source);
-  - *same layer*: leave/enter on the facing cross ports at that border's
-    centreline (side → side for `"v"`, top/bottom for `"h"`). This is the case
-    that used to produce the diagonal: a vertical router must not use bottom →
-    top when both cards share a row.
+`assignLayers` (publicly `rankTypes`) works on the drawn edge list:
 
-Both control points sit outside their boxes, so the final tangent approaches
-the target border from outside. `marker-end` is unchanged; the arrowhead is
-visible because the route no longer approaches from inside the card.
+1. Deduplicate directed pairs and drop self-loops.
+2. Run a depth-first search from the indegree-zero nodes in declaration-id
+   order, then from any remaining node in declaration-id order. An edge into a
+   node still on the DFS stack is a **back edge**: it is recorded and removed.
+   Removing DFS back edges leaves an acyclic graph.
+3. Relax the surviving edges until the layers stop moving:
+   `layer(to) = max(layer(to), layer(from) + 1)`. That is the longest path from
+   a root, so every surviving edge advances one or more layers.
 
-`edgePath(a, b, axis)` remains the string API and now simply returns
-`edgeRoute(...).d`. `edgeRoute` is exported so tests can assert ports, controls
-and `intra` directly instead of reverse-engineering path text.
+`layoutGraph` marks the scene's own edge objects: `scene.edges[i].back = true`
+only on the edges chosen in step 2. A back edge is the only edge exempt from
+the layer-monotonicity rule. The page gives it a distinct look: class
+`edge back`, an orange dashed stroke, the `arrow-back` marker and a
+`回边(环路)` tooltip.
 
-### Invariants that guard the axis
+### 2. Ordering within a layer
+
+`orderLayers` runs four barycenter passes, down/up/down/up. Each pass sorts one
+layer by the average centre x of the cards it connects to. It uses every
+direct neighbour, not only the adjacent layer, because an edge may skip a
+layer; `assignX` recomputes the coordinates after each layer so a later layer
+sees the current order. A card with no neighbour keeps its current x, so an
+added, unrelated card cannot shuffle a whole layer. Every comparison ends with
+the declaration ID, making the sort deterministic without relying on the
+engine's sort stability. There are no random values anywhere.
+
+### 3. Positions, variable sizes and centring
+
+`placeLayers` owns the geometry:
+
+- `cardWidth` estimates a card's width from its title, sub-line and rows;
+  heights already vary with rows and the folded state.
+- a column is as wide as the widest card at that position across all layers;
+- a layer is as tall as its tallest card and is horizontally centred on the
+  layout axis;
+- cards are centred inside their columns, separated by `GAP_X`; layers by
+  `GAP_Y`, with a 40px margin.
+
+The vertical gutter is **adaptive**. For every edge crossing the gap between
+layers *i* and *i+1*, the gap grows until it is wider than that edge's
+horizontal run. The drop across one or more crossed gaps is then always
+larger than the run, so `|y2 - y1| > |x2 - x1|` holds for every edge, not only
+for well-shaped samples. The canvas grows with the number of layers and the
+number of cards in a layer; nothing overlaps.
+
+`layoutGraph` flattens the cards back into `scene.nodes` in draw order and
+writes `x`, `y`, `w`, `h`, `layer` onto each card.
+
+## Public shapes changed
+
+| Shape | Meaning |
+| --- | --- |
+| `scene.nodes[i].layer` | Integer longest-path layer over the scene's dependency edges. All cards in one layer share the same `y`. Previously this was a row/column index produced by the grid layouts. |
+| `scene.nodes` | Ordered by layer, then by the in-layer barycenter order (declaration ID breaks ties), so drawing and folding see a deterministic order. |
+| `scene.edges[i].back` | Present and `true` only on DFS back edges; absent on ordinary edges. |
+| `scene.axis` | Always `"v"`; there is no other value and no option that sets it. |
+| `scene.nodes[i].w` / `h` | Variable, derived from text and rows instead of a fixed `CARD_W`/row height. |
+
+Removed outright: `flowAxis`, `opts.axis` and every axis branch, the
+`按类型分组` layout mode and its `<select>`, `PER_ROW`/`COLS`, the function and
+value bands, and the same-layer side routing. Passing `layout` in a view object
+is ignored; it cannot bring a second direction back.
+
+## Invariants that guard the contract
 
 | Invariant | Test |
 | --- | --- |
-| The scene has one explicit axis and the layouts follow it | `buildScene gives each view a single flow axis` |
-| Every node in a layer shares its flow coordinate (`node.layer`) | `layout obeys the scene axis: every node in a layer shares its flow coordinate` |
-| Vertical edges go downward across layers or sideways within one layer | `vertical flow edges run downward between layers, or sideways within one` |
-| Horizontal edges go sideways across layers or downward within one layer | `horizontal flow edges run sideways between layers, or downward within one` |
-| The reported bug cannot return: two function cards in one row use side ports | `regression: a call edge between two function cards in one row is side-routed` |
+| Every non-back edge goes strictly down a layer | `every non-back edge points to a strictly deeper layer` |
+| Every edge is predominantly vertical and uses bottom/top border centrelines | `every edge is predominantly vertical with bottom-centre and top-centre ports` |
+| 40+ cards (including unexported functions and values) never overlap and grow the canvas | `forty-plus cards lay out without overlaps and grow the canvas` |
+| Two layouts of one scene are identical | `laying out the same scene twice produces identical coordinates` |
+| Adding a card does not change an existing card's layer | `adding a card does not change the layer of any existing card` |
+| An unrelated card does not reorder another layer | `adding an unrelated card keeps every other layer's order` |
+| A cycle produces one marked back edge and still places every card | `a synthetic cycle produces a marked back edge, not an endless rank walk` |
+| There is no horizontal-axis code path left | `the horizontal-axis option is gone` |
+| A layer shares one top coordinate | `layout puts every node of a layer on the layer's top coordinate` |
+| Endpoints sit on a border centreline | `every edge endpoint sits on the centre of a border of the box it connects` |
+| A call between two function cards is layered, not side-routed | `regression: a call between two function cards is layered, not side-routed` |
+| The arrowhead approaches from outside | `an edge approaches both boxes from outside, so its arrowhead is not buried in a card` |
 
 ## Component boundaries
 
 | Concern | Owner | Contract | Guard |
 | --- | --- | --- | --- |
-| Axis choice | `flowAxis` / `buildScene` in `ui.js` | One `"v"` or `"h"` per scene; layouts and router receive it | `buildScene gives each view a single flow axis`; the layer test |
-| Positions and layers | `layoutPackages`, `layoutTypes` in `ui.js` | Fill `x`, `y`, `w`, `h`, `layer`; never route | `layoutTypes never overlaps...`, the layer test |
-| Edge geometry | `edgeRoute`/`edgePath` in `ui.js` | Two boxes + axis in, border-centre ports and controls out | endpoint, vertical, horizontal and regression tests |
-| Card data | `buildCard` + `typeCard`/`funcCard`/`valueCard`/`packageCard` in `ui.js` | Every card has `title`, `sub`, `href`, and `drillHref` when its kind/position supports one | `every card has title, sub, href and the drill target its kind supports` |
-| Card visuals | `CARD_STYLE`, `drawNode` in `ui.html` | Map a card node to SVG; attach no listeners | `node`, `box`, `title`, `kind`, `row`, `crap-badge`, `entry-badge` classes used by smokes |
-| Declaration → card | `cardIndex(scene)` in `ui.html` | One map, rebuilt on every draw; used by edges, click and double-click | smoke click/double-click checks |
-| SVG creation | `svgEl(name, attrs, text)` in `ui.html` | The only caller of `document.createElementNS` | page source (one occurrence) |
-| Inspector HTML | `panelFrame`, `panelFor`, `panelHome`/`panelPkg`/`panelType`/`panelFunc`/`panelValue` in `ui.js` | Pure HTML strings; the frame owns badges/meta/lead/doc/body, each panel function owns one kind's sections | `panelFrame is one frame...`, `every declaration panel renders the doc paragraph` |
-| Inspector DOM | `renderSide` in `ui.html` | One assignment to `side.innerHTML` from `A.panelFor`; search is the only other side-panel renderer | smoke inspector checks |
-| Input | `onCanvasClick`, `onCanvasDblClick`, pan handlers in `ui.html` | All canvas input is delegated through `#svg`; cards/groups own no handlers | smoke click, double-click, fold, pan checks |
-
-Other one-owner reductions:
-
-- `edgeRoute` is the only port/tangent decision; `drawEdges` only converts it
-  to a `<path>`.
-- `panelFor` is the only route-to-panel map; `routePkg` is the only route-to-
-  package map (the crumb and the panel share it).
-- `cardIndex` is the only declaration-to-card map, so the renderer, the click
-  handler and the double-click handler cannot disagree about which card a
-  declaration is.
-- `svgEl` is the only element factory, so namespaces and attributes cannot
-  drift between markers, edges and cards.
-- The six duplicated `renderX` page functions and their per-node listeners are
-  gone. Panels are pure functions covered by `node --test`.
-
-## What the bug class now requires to reappear
-
-To reintroduce the original failure, a change would have to make the layer
-test, the vertical/horizontal flow tests, the endpoint/centreline test, *and*
-the outside-approach test fail together. A single-coordinate patch cannot pass
-them, because the tests assert the relationship between `buildScene`'s axis,
-the card boxes, and the router's ports rather than a snapshot path string.
-
-The page-side invariants are structural: cards are built before they are drawn,
-`drawNode` cannot register a click listener, and both click paths resolve the
-card through the same `cardIndex`. Panels are pure strings, so a missing doc
-paragraph is a test failure rather than a browser-only regression.
+| Flow direction | `FLOW_AXIS` / `buildScene` | Constant `"v"` per scene; no option and no branch | `the horizontal-axis option is gone`; `buildScene gives every view the same top-down flow` |
+| Layers and cycle break | `assignLayers` / `rankTypes` in `ui.js` | Integer longest-path layers; DFS back edges marked on scene edges | the layer, cycle and add-card tests |
+| In-layer order | `orderLayers` in `ui.js` | Four deterministic x-barycenter passes over all direct neighbours; declaration ID tie-break | determinism and unrelated-layer tests |
+| Boxes and gutters | `packageCards`, `layoutGraph`, `assignX`, `placeLayers` in `ui.js` | Fill `x`, `y`, `w`, `h`, `layer`; centre layers; no overlaps | 40-card, layer-coordinate and determinism tests |
+| Card data and size | `buildCard` + `cardWidth` in `ui.js` | Every card has `title`, `sub`, `href`, `drillHref` and a text-derived `w` | card and panel tests |
+| Edge geometry | `edgeRoute` / `edgePath` in `ui.js` | Two boxes in, bottom-centre → top-centre out | vertical, endpoint and outside-approach tests |
+| Edge style | `CARD_STYLE`, `drawNode`, `edgeClass`, `markerFor`, `drawEdges` in `ui.html` | Map a node/edge to SVG; attach no listeners; back edges carry `.back` | smoke click/drill checks; `edge back` CSS |
+| Declaration → card | `cardIndex(scene)` in `ui.html` | One map, rebuilt on every draw | smoke click/double-click checks |
+| Inspector HTML | `panelFrame`, `panelFor`, `panelHome`/`panelPkg`/`panelType`/`panelFunc`/`panelValue` in `ui.js` | Pure HTML strings | panel tests |
+| Input | delegated `#svg` click/dblclick/pan handlers in `ui.html` | Cards and groups own no handlers | smoke click, fold, pan checks |
 
 ## Verification commands
 
@@ -111,10 +131,12 @@ node --test --test-isolation=none
 node .tmp/smoke.js
 node .tmp/smoke-layers.js
 node .tmp/smoke-focus.js
+node .tmp/smoke-cards.js
+node .tmp/smoke-export.js
 go test ./...
 ```
 
 The page and `/ui.js` are served separately by the HTTP server and inlined into
-the single-file export by `internal/export`; both paths still consume the same
-`ui.html` placeholder and `ui.js`, so the component split introduces no new
+the single-file export by `internal/export`; both paths consume the same
+`ui.html` placeholder and `ui.js`, so this layout change introduces no new
 asset route.

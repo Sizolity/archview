@@ -125,6 +125,8 @@
   .edge.hl { stroke-width: 2.6; }
   .edge.faded { opacity: .18; }
   .edge.emb { stroke: #2563eb; }
+  /* Last, so a back edge stays orange-and-dashed even when it is also a call. */
+  .edge.back { stroke: #d97706; stroke-dasharray: 2 4; }
   .badge-svg { font-size: 9px; fill: #475569; }
   .crap { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .crap.ok { background: #dcfce7; color: #166534; }
@@ -169,10 +171,6 @@
     <input id="q" type="search" placeholder="搜索类型 / 函数…（/）" autocomplete="off">
     <label class="check"><input id="all" type="checkbox"> 含未导出</label>
     <label class="check"><input id="calls" type="checkbox"> 调用边</label>
-    <select id="layout" title="布局方式">
-      <option value="layer">依赖分层</option>
-      <option value="kind">按类型分组</option>
-    </select>
     <button id="fit" type="button">适应</button>
     <button id="reload" type="button">重载</button>
     <span id="legend" class="legend" hidden>CRAP 低 <b class="ok">≤5</b> · 中 <b class="warn">≤30</b> · 高 <b class="bad">&gt;30</b></span>
@@ -200,6 +198,7 @@
         <span class="ln" style="border-top-color:#0891b2" title="静态调用;虚线为接口调用"></span><small>调用</small>
         <span class="ln" style="border-top-color:#dc2626;border-top-width:3px" title="分层违规:下层依赖上层"></span><small>违规</small></div>
       <div><b>跨包</b> <span class="ln" style="border-top-color:#0d9488;border-top-style:dashed" title="跨包调用,且两包之间没有同向 import"></span><small>跨包调用(无 import)</small></div>
+      <div><b>回边</b> <span class="ln" style="border-top-color:#d97706;border-top-style:dashed" title="依赖环上被打破的一条边;它指回上层"></span><small>环回边</small></div>
     </div>  </section>
   <aside id="side"></aside>
 </main>
@@ -236,7 +235,7 @@
 
   var state = {
     model: null, all: false, q: "", route: { view: "home" }, sel: "",
-    collapsed: [], expanded: [], layout: "layer", calls: false,
+    collapsed: [], expanded: [], calls: false,
     hits: [], hitIndex: 0,
     tx: 0, ty: 0, k: 1, sceneKey: "", scene: null,
     cards: new Map()
@@ -336,10 +335,12 @@
     { id: "arrow-emb", fill: "#2563eb" },
     { id: "arrow-call", fill: "#0891b2" },
     { id: "arrow-callonly", fill: "#0d9488" },
-    { id: "arrow-violation", fill: "#dc2626" }
+    { id: "arrow-violation", fill: "#dc2626" },
+    { id: "arrow-back", fill: "#d97706" }
   ];
 
   function markerFor(e) {
+    if (e.back) return "arrow-back";
     if (e.violation) return "arrow-violation";
     if (e.callOnly) return "arrow-callonly";
     if (e.call) return "arrow-call";
@@ -354,6 +355,7 @@
 
   function edgeClass(e) {
     var cls = "edge";
+    if (e.back) cls += " back";
     if (e.ref) cls += " ref";
     if (e.kind === "implements") cls += " impl";
     if (e.kind === "embeds") cls += " emb";
@@ -374,8 +376,10 @@
     });
   }
 
-  // drawEdges routes every scene edge from its two cards and the scene axis.
-  // The offset/axis decisions all live in A.edgePath, not here.
+  // drawEdges routes every scene edge from its two cards. Every route leaves a
+  // bottom centre and enters a top centre; the port decision lives in
+  // A.edgePath, not here. A back edge keeps that same port pair and is marked
+  // by the .back class and its own arrow colour.
   function drawEdges(scene, cards, world) {
     edgeEls = [];
     scene.edges.forEach(function (e) {
@@ -383,7 +387,7 @@
       if (!a || !b) return;
       var cls = edgeClass(e);
       var p = svgEl("path", {
-        d: A.edgePath(a, b, scene.axis),
+        d: A.edgePath(a, b),
         class: cls,
         "marker-end": "url(#" + markerFor(e) + ")"
       });
@@ -391,7 +395,7 @@
       if (!e.ref) {
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on. A callOnly edge names the absent import.
-        var lead = e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : "");
+        var lead = e.back ? "回边(环路): " : (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : ""));
         p.appendChild(svgEl("title", {}, lead + e.from + " → " + e.to));
       }
       world.appendChild(p);
@@ -586,7 +590,6 @@
     var scene = A.buildScene(state.model, idx, state.route, state.all, {
       collapsed: state.collapsed,
       expanded: state.expanded,
-      layout: state.layout,
       calls: state.calls,
       query: state.q,
       selected: state.sel
@@ -609,10 +612,10 @@
   function updateChrome() {
     var hint = document.getElementById("hint");
     hint.textContent =
-      "拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码" +
+      "拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码 · 自上而下" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
-      " · 箭头指向被依赖方 · ▾ 折叠成员";
+      " · 橙色虚线 = 回边 · 箭头指向被依赖方 · ▾ 折叠成员";
   }
 
   // ---------- binding ----------
@@ -736,11 +739,6 @@
 
   document.getElementById("fit").addEventListener("click", function () { fit(state.scene); });
   document.getElementById("reload").addEventListener("click", function () { boot(); });
-  document.getElementById("layout").addEventListener("change", function (e) {
-    state.layout = e.target.value;
-    state.sceneKey = "";
-    render();
-  });
   document.getElementById("calls").addEventListener("change", function (e) {
     state.calls = e.target.checked;
     state.sceneKey = "";

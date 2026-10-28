@@ -193,13 +193,15 @@ test("layoutTypes hides rows beyond seven and counts the rest", () => {
   assert.equal(nodes[0].more, 3);
 });
 
-test("layoutPackages puts importers to the right of what they import", () => {
+test("layoutPackages puts importers above what they import", () => {
   const model = fixture();
   const idx = ui.indexModel(model);
   const nodes = ui.layoutPackages(model.packages, idx.pkgByPath, { modelPath: model.path, all: false });
   const app = nodes.find((n) => n.id === "example.com/app");
   const store = nodes.find((n) => n.id === "example.com/app/store");
-  assert.ok(app.x > store.x, "app imports store, so it sits in a later column");
+  assert.ok(app.y < store.y, "app imports store, so it sits above it");
+  assert.equal(app.layer, 0);
+  assert.equal(store.layer, 1);
   assert.equal(store.sub, "store");
   assert.equal(store.title, "store");
   assert.equal(store.href, "#/", "a click selects a package in place");
@@ -315,27 +317,27 @@ test("buildScene falls back to the home view for an unknown package", () => {
   assert.equal(ui.buildScene(model, idx, { view: "type", id: "nope" }, false), null);
 });
 
-test("edgePath never emits NaN, whichever axis or order", () => {
+test("edgePath never emits NaN, whichever the order", () => {
   const a = { x: 0, y: 0, w: 100, h: 50 };
   const b = { x: 300, y: 100, w: 100, h: 50 };
-  for (const axis of ["v", "h"]) {
-    for (const [from, to] of [[a, b], [b, a]]) {
-      const d = ui.edgePath(from, to, axis);
-      assert.match(d, /^M/, axis);
-      assert.equal(d.includes("NaN"), false, axis);
-    }
+  for (const [from, to] of [[a, b], [b, a]]) {
+    const d = ui.edgePath(from, to);
+    assert.match(d, /^M/);
+    assert.equal(d.includes("NaN"), false);
   }
 });
 
-test("buildScene gives each view a single flow axis", () => {
+test("buildScene gives every view the same top-down flow", () => {
   const model = fixture();
   const idx = ui.indexModel(model);
   const home = ui.buildScene(model, idx, { view: "home" }, false);
-  assert.equal(home.axis, "h", "package columns flow left to right");
+  assert.equal(home.axis, "v", "package imports flow top to bottom");
   const layered = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
-  assert.equal(layered.axis, "v", "the layered type layout flows top to bottom");
-  const grid = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false, { layout: "kind" });
-  assert.equal(grid.axis, "h", "the kind grid flows left to right");
+  assert.equal(layered.axis, "v", "the package layout flows top to bottom");
+  // The removed layout switch cannot reintroduce a second direction.
+  const legacy = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false, { layout: "kind" });
+  assert.equal(legacy.axis, "v");
+  assert.deepEqual(legacy.nodes, layered.nodes);
 });
 
 test("fitTransform keeps the zoom in range and centres the scene", () => {
@@ -566,7 +568,6 @@ test("layer layout stacks users above dependencies", () => {
   const types = [mkType("A"), mkType("B"), mkType("C")];
   const nodes = ui.layoutTypes({ name: "p" }, types, {
     all: true,
-    layout: "layer",
     edges: chainEdges()
   });
   const t = byTitle(nodes);
@@ -574,7 +575,7 @@ test("layer layout stacks users above dependencies", () => {
   assert.ok(t.B.y < t.C.y, "B should sit above C");
 });
 
-test("layer layout is the default", () => {
+test("layoutTypes always uses dependency layers", () => {
   const nodes = ui.layoutTypes({ name: "p" }, [mkType("A"), mkType("B")], {
     all: true,
     edges: [{ from: "example.com/p#A", to: "example.com/p#B" }]
@@ -583,9 +584,9 @@ test("layer layout is the default", () => {
   assert.ok(t.A.y < t.B.y);
 });
 
-test("kind layout groups structs, then interfaces, then named types", () => {
+test("cards without edges share layer 0 and keep declaration-id order", () => {
   const types = [mkType("Z", "type"), mkType("I", "interface"), mkType("B"), mkType("A")];
-  const nodes = ui.layoutTypes({ name: "p" }, types, { all: true, layout: "kind" });
+  const nodes = ui.layoutTypes({ name: "p" }, types, { all: true });
   assert.deepEqual(nodes.map((n) => n.title), ["A", "B", "I", "Z"]);
   assert.deepEqual(nodes.map((n) => n.sub.split(" · ")[0]), [
     "struct",
@@ -593,9 +594,10 @@ test("kind layout groups structs, then interfaces, then named types", () => {
     "interface",
     "type"
   ]);
+  assert.ok(nodes.every((n) => n.layer === 0));
 });
 
-test("ten types and fifteen edges never overlap in either layout", () => {
+test("ten types and fifteen edges never overlap", () => {
   const types = [];
   for (let i = 0; i < 10; i++) {
     types.push({
@@ -615,14 +617,12 @@ test("ten types and fifteen edges never overlap in either layout", () => {
   }
   assert.equal(edges.length, 15);
 
-  for (const mode of ["layer", "kind"]) {
-    const first = ui.layoutTypes({ name: "p" }, types, { all: true, layout: mode, edges });
-    const second = ui.layoutTypes({ name: "p" }, types, { all: true, layout: mode, edges });
-    assert.deepEqual(first, second, mode + " must be deterministic");
-    for (let i = 0; i < first.length; i++) {
-      for (let j = i + 1; j < first.length; j++) {
-        assert.equal(overlaps(first[i], first[j]), false, mode + " overlap: " + first[i].id + "/" + first[j].id);
-      }
+  const first = ui.layoutTypes({ name: "p" }, types, { all: true, edges });
+  const second = ui.layoutTypes({ name: "p" }, types, { all: true, edges });
+  assert.deepEqual(first, second, "layout must be deterministic");
+  for (let i = 0; i < first.length; i++) {
+    for (let j = i + 1; j < first.length; j++) {
+      assert.equal(overlaps(first[i], first[j]), false, "overlap: " + first[i].id + "/" + first[j].id);
     }
   }
 });
@@ -641,18 +641,21 @@ test("typePairs deduplicates references and skips self-loops", () => {
   assert.equal(pairs.length, 2);
 });
 
-test("buildScene passes the layout mode through", () => {
+test("buildScene layers the package graph", () => {
   const model = fixture();
   const idx = ui.indexModel(model);
   const route = { view: "pkg", path: "example.com/app" };
 
-  const layered = ui.buildScene(model, idx, route, false, { layout: "layer" });
+  const layered = ui.buildScene(model, idx, route, false);
   const t = byTitle(layered.nodes);
   // App uses Server, so App sits above it.
   assert.ok(t.App.y < t.Server.y, "layered layout puts the user above the dependency");
 
-  const grouped = ui.buildScene(model, idx, route, false, { layout: "kind" });
-  assert.deepEqual(grouped.nodes.filter((n) => n.kind === "type").map((n) => n.title), ["App", "Server"]);
+  // There is no layout switch left: an old "kind" request produces the same
+  // scene, rather than silently selecting a second direction.
+  const legacy = ui.buildScene(model, idx, route, false, { layout: "kind" });
+  assert.deepEqual(legacy.nodes, layered.nodes);
+  assert.deepEqual(legacy.edges, layered.edges);
 });
 
 // ---------- 2.2 call graph ----------
@@ -923,22 +926,24 @@ test("edgePath routes vertically when the target sits below", () => {
   assert.match(d, / 200,300$/);
 });
 
-test("edgePath routes horizontally when the target sits beside", () => {
-  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 20, w: 100, h: 50 }, "h");
-  assert.match(d, /^M100,25 C/);
-  assert.match(d, / 300,45$/);
+test("edgePath always leaves the bottom and enters the top, even beside", () => {
+  // The target is to the side but above: the ports still do not rotate.
+  const d = ui.edgePath({ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 20, w: 100, h: 50 });
+  assert.match(d, /^M50,50 C/);
+  assert.match(d, / 350,20$/);
 });
 
-test("edgePath points the same way whatever the order", () => {
+test("edgePath leaves every source at the bottom and enters every target at the top", () => {
   const a = { x: 0, y: 0, w: 100, h: 50 };
   const b = { x: 300, y: 300, w: 100, h: 50 };
-  // Reversing the pair must produce the reverse path, so the arrow always ends
-  // on the target and the line never doubles back on itself.
-  const forward = ui.edgePath(a, b, "v");
-  const backward = ui.edgePath(b, a, "v");
+  // Reversing the pair changes the source and target, never the port kind:
+  // every edge leaves a bottom border and enters a top border.
+  const forward = ui.edgePath(a, b);
+  const backward = ui.edgePath(b, a);
   assert.match(forward, /^M50,50 /);
-  assert.match(backward, /^M350,300 /);
-  assert.match(backward, / 50,50$/);
+  assert.match(forward, / 350,300$/);
+  assert.match(backward, /^M350,350 /);
+  assert.match(backward, / 50,0$/);
 });
 
 test("applyMoved overrides laid out positions", () => {
@@ -1048,9 +1053,9 @@ test("buildScene draws function cards", () => {
   const fns = scene.nodes.filter((n) => n.kind === "func");
   assert.deepEqual(fns.map((n) => n.title).sort(), ["New"]);
   assert.ok(fns.every((n) => typeof n.sub === "string" && n.sub.indexOf("(") === 0));
-  // The band sits below every type card.
-  const types = scene.nodes.filter((n) => n.kind === "type");
-  assert.ok(fns.every((f) => types.every((t) => f.y > t.y + t.h)));
+  // Function cards are graph nodes now, not a fixed band: they still need a
+  // real layer and finite boxes even when the package graph is types-only.
+  assert.ok(fns.every((n) => Number.isInteger(n.layer) && Number.isFinite(n.x) && Number.isFinite(n.y) && n.w > 0 && n.h > 0));
 });
 // Cards carry their position so a double-click can open the source.
 test("buildScene nodes carry a source position", () => {
@@ -1129,7 +1134,7 @@ test("package cards show the doc comment when the package has one", () => {
   assert.equal(b.sub, "b");
 });
 
-// ---------- invariant tests: axis contract, cards, panels ----------
+// ---------- invariant tests: one flow direction, cards, panels ----------
 //
 // These are the regression net for the diagonal-edge bug: call edges used to
 // connect two cards that sat in the same horizontal row while the scene
@@ -1237,12 +1242,9 @@ function invariantScenes() {
         scene: ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, true, { calls: true })
       },
       {
-        name: "package/kind",
+        name: "package/no-calls",
         route: { view: "pkg", path: "example.com/app" },
-        scene: ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, true, {
-          calls: true,
-          layout: "kind"
-        })
+        scene: ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, true, { calls: false })
       }
     ]
   };
@@ -1290,10 +1292,6 @@ function assertBorderCentre(p, n, where) {
   return side;
 }
 
-function rangesOverlap(a0, a1, b0, b1) {
-  return a0 < b1 - 1 && b0 < a1 - 1;
-}
-
 function assertOutside(point, n, side, where) {
   if (side === "top") {
     assert.ok(point[1] <= n.y + 0.5, `${where}: control ${point} is inside the top of ${n.id}`);
@@ -1306,20 +1304,21 @@ function assertOutside(point, n, side, where) {
   }
 }
 
-function eachSceneEdge(where, scene, axis, visit) {
+function eachSceneEdge(where, scene, visit) {
   const byId = new Map(scene.nodes.map((n) => [n.id, n]));
   scene.edges.forEach((e) => {
     const a = byId.get(e.from);
     const b = byId.get(e.to);
     if (!a || !b) return;
-    visit({ a, b, e, d: ui.edgePath(a, b, axis) });
+    visit({ a, b, e, d: ui.edgePath(a, b) });
   });
 }
 
-test("layout obeys the scene axis: every node in a layer shares its flow coordinate", () => {
+test("layout puts every node of a layer on the layer's top coordinate", () => {
   const { scenes } = invariantScenes();
   for (const { name, scene } of scenes) {
     assert.ok(scene.nodes.length > 0, name + ": no nodes");
+    assert.equal(scene.axis, "v", name + ": a view has one flow direction");
     const layers = new Map();
     scene.nodes.forEach((n) => {
       assert.ok(Number.isInteger(n.layer),
@@ -1328,11 +1327,10 @@ test("layout obeys the scene axis: every node in a layer shares its flow coordin
       layers.get(n.layer).push(n);
     });
     layers.forEach((nodes, layer) => {
-      const coord = scene.axis === "v" ? "y" : "x";
-      const first = nodes[0][coord];
+      const first = nodes[0].y;
       nodes.forEach((n) => {
-        assert.ok(Math.abs(n[coord] - first) <= 1,
-          `${name}: layer ${layer} mixes ${coord}=${n[coord]} (${n.id}) with ${coord}=${first}`);
+        assert.ok(Math.abs(n.y - first) <= 1,
+          `${name}: layer ${layer} mixes y=${n.y} (${n.id}) with y=${first}`);
       });
     });
   }
@@ -1341,7 +1339,7 @@ test("layout obeys the scene axis: every node in a layer shares its flow coordin
 test("every edge endpoint sits on the centre of a border of the box it connects", () => {
   const { scenes } = invariantScenes();
   for (const { name, scene } of scenes) {
-    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
+    eachSceneEdge(name, scene, ({ a, b, e, d }) => {
       const p = parseEdgePath(d);
       assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
       assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
@@ -1349,35 +1347,23 @@ test("every edge endpoint sits on the centre of a border of the box it connects"
   }
 });
 
-test("vertical flow edges run downward between layers, or sideways within one", () => {
+test("every edge uses bottom and top ports, including back edges", () => {
   const { scenes } = invariantScenes();
   for (const { name, scene } of scenes) {
-    if (scene.axis !== "v") continue;
-    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
+    eachSceneEdge(name, scene, ({ a, b, e, d }) => {
       const p = parseEdgePath(d);
       const sa = assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
       const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
-      const sameLayer = rangesOverlap(a.y, a.y + a.h, b.y, b.y + b.h);
-      if (sameLayer) {
-        assert.ok(["left", "right"].includes(sa) && ["left", "right"].includes(sb),
-          `${name}: same-layer edge ${e.from}->${e.to} must leave and enter on the side, got ${sa}->${sb} (${d})`);
-        assert.ok(Math.abs(p.start[1] - p.end[1]) <= 1,
-          `${name}: same-layer edge ${e.from}->${e.to} is diagonal (${d})`);
-        assert.ok((sa === "right") === (b.x + b.w / 2 > a.x + a.w / 2),
-          `${name}: ${e.from}->${e.to} leaves the wrong side (${sa}, ${d})`);
-      } else {
-        assert.ok(["top", "bottom"].includes(sa) && ["top", "bottom"].includes(sb),
-          `${name}: cross-layer edge ${e.from}->${e.to} must use the flow ports, got ${sa}->${sb} (${d})`);
-        assert.ok(!(sa === "bottom" && sb === "top") || p.end[1] >= p.start[1],
-          `${name}: edge ${e.from}->${e.to} enters a top port from below (${d})`);
-        assert.ok(!(sa === "top" && sb === "bottom") || p.end[1] <= p.start[1],
-          `${name}: edge ${e.from}->${e.to} enters a bottom port from above (${d})`);
-      }
+      assert.equal(sa, "bottom", `${name}: ${e.from}->${e.to} must leave the bottom (${d})`);
+      assert.equal(sb, "top", `${name}: ${e.from}->${e.to} must enter the top (${d})`);
+      if (e.back) return;
+      assert.ok(b.layer > a.layer,
+        `${name}: non-back edge ${e.from} (${a.layer}) -> ${e.to} (${b.layer}) must move down a layer`);
     });
   }
 });
 
-test("regression: a call edge between two function cards in one row is side-routed", () => {
+test("regression: a call between two function cards is layered, not side-routed", () => {
   const model = {
     path: "example.com/app",
     calls: [{ from: "example.com/app#Load", to: "example.com/app#LoadWith" }],
@@ -1398,47 +1384,24 @@ test("regression: a call edge between two function cards in one row is side-rout
   const a = byId.get("example.com/app#Load");
   const b = byId.get("example.com/app#LoadWith");
   assert.equal(scene.axis, "v");
-  assert.equal(a.y, b.y, "the two function cards share a row");
+  // The old bug was two called functions in one row. The call edge now ranks
+  // them into different layers, so a horizontal side route cannot occur.
+  assert.ok(b.layer > a.layer, `call target must sit below its caller: ${a.layer} -> ${b.layer}`);
+  assert.ok(b.y > a.y, "the two function cards must not share a row");
 
-  const p = parseEdgePath(ui.edgePath(a, b, scene.axis));
-  const sa = assertBorderCentre(p.start, a, "function row start");
-  const sb = assertBorderCentre(p.end, b, "function row end");
-  assert.ok(["left", "right"].includes(sa) && ["left", "right"].includes(sb),
-    `a same-row edge must use side ports, got ${sa}->${sb}: ${ui.edgePath(a, b, scene.axis)}`);
-  assert.equal(p.start[1], a.y + a.h / 2, "it leaves on the row centreline");
-  assert.equal(p.end[1], b.y + b.h / 2, "it enters on the row centreline");
-});
-
-test("horizontal flow edges run sideways between layers, or downward within one", () => {
-  const { scenes } = invariantScenes();
-  for (const { name, scene } of scenes) {
-    if (scene.axis !== "h") continue;
-    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
-      const p = parseEdgePath(d);
-      const sa = assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
-      const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
-      const sameLayer = rangesOverlap(a.x, a.x + a.w, b.x, b.x + b.w);
-      if (sameLayer) {
-        assert.ok(["top", "bottom"].includes(sa) && ["top", "bottom"].includes(sb),
-          `${name}: same-layer edge ${e.from}->${e.to} must leave and enter on the flow side, got ${sa}->${sb} (${d})`);
-        assert.ok(Math.abs(p.start[0] - p.end[0]) <= 1,
-          `${name}: same-layer edge ${e.from}->${e.to} is diagonal (${d})`);
-      } else {
-        assert.ok(["left", "right"].includes(sa) && ["left", "right"].includes(sb),
-          `${name}: cross-layer edge ${e.from}->${e.to} must use the flow ports, got ${sa}->${sb} (${d})`);
-        assert.ok(!(sa === "right" && sb === "left") || p.end[0] >= p.start[0],
-          `${name}: edge ${e.from}->${e.to} enters a left port from the right (${d})`);
-        assert.ok(!(sa === "left" && sb === "right") || p.end[0] <= p.start[0],
-          `${name}: edge ${e.from}->${e.to} enters a right port from the left (${d})`);
-      }
-    });
-  }
+  const p = parseEdgePath(ui.edgePath(a, b));
+  const sa = assertBorderCentre(p.start, a, "function call start");
+  const sb = assertBorderCentre(p.end, b, "function call end");
+  assert.equal(sa, "bottom");
+  assert.equal(sb, "top");
+  assert.ok(Math.abs(p.end[1] - p.start[1]) > Math.abs(p.end[0] - p.start[0]),
+    "the function call must be predominantly vertical");
 });
 
 test("an edge approaches both boxes from outside, so its arrowhead is not buried in a card", () => {
   const { scenes } = invariantScenes();
   for (const { name, scene } of scenes) {
-    eachSceneEdge(name, scene, scene.axis, ({ a, b, e, d }) => {
+    eachSceneEdge(name, scene, ({ a, b, e, d }) => {
       const p = parseEdgePath(d);
       const sa = assertBorderCentre(p.start, a, `${name} ${e.from}->${e.to} start`);
       const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
@@ -1510,4 +1473,315 @@ test("every declaration panel renders the doc paragraph", () => {
   // A declaration without a doc must not grow an empty doc paragraph.
   const plain = ui.panelFor({ view: "type", id: "example.com/app#Plain" }, pkgScene, ctx);
   assert.ok(!plain.includes('class="doc"'), "a doc-less type must not render an empty doc paragraph");
+});
+
+// ---------- one flow direction: vertical layers from the graph ----------
+//
+// The old layout mixed directions: connected cards were placed on a fixed grid,
+// so two cards in one row produced a horizontal edge inside a top-down scene.
+// These tests describe the replacement contract. They are phrased against the
+// scene (layers, boxes) and the router's own path, never against an internal
+// loop order, so a different but equivalent layout algorithm can keep them.
+
+// bigModel is the "含未导出" acceptance model: 24 types in a reference chain,
+// 12 functions in a call chain, and six constants/variables. With `all: true`
+// it has 42 cards, about three times the exported-only view.
+function bigModel() {
+  const p = "example.com/big";
+  const types = [];
+  for (let i = 0; i < 24; i++) {
+    const next = "T" + String(i + 1).padStart(2, "0");
+    types.push({
+      id: p + "#T" + String(i).padStart(2, "0"),
+      name: "T" + String(i).padStart(2, "0"),
+      kind: i % 4 === 0 ? "interface" : "struct",
+      exported: i % 3 === 0,
+      doc: i % 3 === 0 ? "T" + i + " is the card for step " + i + "." : "",
+      pos: "t.go:" + (i + 1),
+      fields: i < 23 ? [{ name: "next", type: next, exported: true, refs: [p + "#" + next] }] : [],
+      methods: [{ id: p + "#T" + String(i).padStart(2, "0") + ".M" + i, name: "M" + i,
+        sig: "(int) error", exported: i % 3 !== 0 }]
+    });
+  }
+  const funcs = [];
+  for (let i = 0; i < 12; i++) {
+    funcs.push({
+      id: p + "#F" + String(i).padStart(2, "0"),
+      name: "F" + String(i).padStart(2, "0"),
+      sig: "(" + (i % 4) + " args) error",
+      doc: i % 2 ? "F" + i + " does work.\nMore detail." : "",
+      pos: "f.go:" + (i + 1),
+      exported: i % 3 === 0
+    });
+  }
+  const consts = [];
+  const vars = [];
+  for (let i = 0; i < 3; i++) {
+    consts.push({ name: "C" + i, type: "int", value: String(i), exported: i % 3 === 0, pos: "c.go:" + (i + 1) });
+    vars.push({ name: "V" + i, type: "string", value: "\"v" + i + "\"", exported: i % 3 === 0, pos: "v.go:" + (i + 1) });
+  }
+  const calls = [];
+  for (let i = 0; i + 1 < funcs.length; i++) {
+    calls.push({ from: funcs[i].id, to: funcs[i + 1].id });
+  }
+  // A call into a method belongs to the owner type's card, so this also makes
+  // the first type a successor of the first function.
+  calls.push({ from: p + "#F00", to: p + "#T00.M0" });
+  return {
+    path: p,
+    calls,
+    packages: [{
+      path: p, name: "big", imports: [], types, funcs, consts, vars
+    }]
+  };
+}
+
+// homeModel is four packages, two import edges and one isolated package.
+function homeModel() {
+  const p = "example.com/home";
+  const empty = () => ({ types: [], funcs: [], consts: [], vars: [] });
+  return {
+    path: p,
+    packages: [
+      Object.assign({ path: p + "/a", name: "a", imports: [p + "/b"] }, empty()),
+      Object.assign({ path: p + "/b", name: "b", imports: [p + "/c"] }, empty()),
+      Object.assign({ path: p + "/c", name: "c", imports: [] }, empty()),
+      Object.assign({ path: p + "/d", name: "d", imports: [] }, empty())
+    ]
+  };
+}
+
+// cycleModel is a three-type reference cycle: A -> B -> C -> A.
+function cycleModel() {
+  const p = "example.com/cycle";
+  const edge = (from, to) => ({ name: from.toLowerCase(), type: to, exported: true, refs: [p + "#" + to] });
+  return {
+    path: p,
+    packages: [{
+      path: p, name: "cycle", imports: [],
+      types: [
+        { id: p + "#A", name: "A", kind: "struct", exported: true, pos: "a.go:1", fields: [edge("A", "B")], methods: [] },
+        { id: p + "#B", name: "B", kind: "struct", exported: true, pos: "b.go:1", fields: [edge("B", "C")], methods: [] },
+        { id: p + "#C", name: "C", kind: "struct", exported: true, pos: "c.go:1", fields: [edge("C", "A")], methods: [] }
+      ],
+      funcs: [], consts: [], vars: []
+    }]
+  };
+}
+
+// drawableEdges joins a scene's edges to the two cards they connect.
+function drawableEdges(scene) {
+  const byId = new Map(scene.nodes.map((n) => [n.id, n]));
+  const out = [];
+  scene.edges.forEach((e) => {
+    const a = byId.get(e.from);
+    const b = byId.get(e.to);
+    if (a && b) out.push({ e, a, b });
+  });
+  return out;
+}
+
+// flowScenes is one scene per view shape: module, package, cycle and the
+// invariant fixture. Every one of them must obey the same geometric contract.
+function flowScenes() {
+  const big = bigModel();
+  const bigIdx = ui.indexModel(big);
+  const cycle = cycleModel();
+  const cycleIdx = ui.indexModel(cycle);
+  const home = homeModel();
+  const homeIdx = ui.indexModel(home);
+  return [
+    { name: "home", scene: ui.buildScene(home, homeIdx, { view: "home" }, true, { calls: true }) },
+    {
+      name: "package/all",
+      scene: ui.buildScene(big, bigIdx, { view: "pkg", path: "example.com/big" }, true, { calls: true })
+    },
+    {
+      name: "package/cycle",
+      scene: ui.buildScene(cycle, cycleIdx, { view: "pkg", path: "example.com/cycle" }, true, { calls: true })
+    },
+    {
+      name: "package/invariant",
+      scene: invariantScenes().scenes.find((s) => s.name === "package/layer").scene
+    }
+  ];
+}
+
+test("every non-back edge points to a strictly deeper layer", () => {
+  let checked = 0;
+  let backs = 0;
+  for (const { name, scene } of flowScenes()) {
+    const ends = drawableEdges(scene);
+    assert.ok(ends.length > 0, name + ": scene has no drawable edges");
+    for (const { e, a, b } of ends) {
+      assert.ok(Number.isInteger(a.layer), `${name}: ${a.id} has no integer layer`);
+      assert.ok(Number.isInteger(b.layer), `${name}: ${b.id} has no integer layer`);
+      if (e.back) { backs++; continue; }
+      assert.ok(b.layer > a.layer,
+        `${name}: non-back edge ${e.from} (layer ${a.layer}) -> ${e.to} (layer ${b.layer}) must point down a layer`);
+      checked++;
+    }
+  }
+  assert.ok(checked >= 20, "expected the fixture set to exercise many non-back edges, got " + checked);
+  assert.ok(backs >= 1, "the cycle scene must contribute at least one back edge");
+});
+
+test("every edge is predominantly vertical with bottom-centre and top-centre ports", () => {
+  for (const { name, scene } of flowScenes()) {
+    for (const { e, a, b } of drawableEdges(scene)) {
+      const d = ui.edgePath(a, b);
+      const p = parseEdgePath(d);
+      const where = `${name}: ${e.from} -> ${e.to}${e.back ? " (back)" : ""}`;
+      assert.ok(Math.abs(p.start[0] - (a.x + a.w / 2)) <= 1,
+        `${where}: starts at x=${p.start[0]}, not the bottom centreline ${a.x + a.w / 2} (${d})`);
+      assert.ok(Math.abs(p.start[1] - (a.y + a.h)) <= 1,
+        `${where}: starts at y=${p.start[1]}, not the source bottom ${a.y + a.h} (${d})`);
+      assert.ok(Math.abs(p.end[0] - (b.x + b.w / 2)) <= 1,
+        `${where}: ends at x=${p.end[0]}, not the top centreline ${b.x + b.w / 2} (${d})`);
+      assert.ok(Math.abs(p.end[1] - b.y) <= 1,
+        `${where}: ends at y=${p.end[1]}, not the target top ${b.y} (${d})`);
+      assert.ok(Math.abs(p.end[1] - p.start[1]) > Math.abs(p.end[0] - p.start[0]),
+        `${where}: edge is not predominantly vertical (${d})`);
+    }
+  }
+});
+
+test("forty-plus cards lay out without overlaps and grow the canvas", () => {
+  const model = bigModel();
+  const idx = ui.indexModel(model);
+  const route = { view: "pkg", path: "example.com/big" };
+  const shown = ui.buildScene(model, idx, route, false, { calls: true });
+  const all = ui.buildScene(model, idx, route, true, { calls: true });
+
+  assert.ok(all.nodes.length >= 40, "the all=true model must have 40+ cards, got " + all.nodes.length);
+  assert.ok(all.nodes.length >= shown.nodes.length * 2,
+    "含未导出 must roughly double the cards: " + shown.nodes.length + " -> " + all.nodes.length);
+
+  let overlapsFound = 0;
+  for (let i = 0; i < all.nodes.length; i++) {
+    for (let j = i + 1; j < all.nodes.length; j++) {
+      if (overlaps(all.nodes[i], all.nodes[j])) overlapsFound++;
+    }
+  }
+  assert.equal(overlapsFound, 0, overlapsFound + " overlapping card pairs out of " + all.nodes.length);
+
+  all.nodes.forEach((n) => {
+    assert.ok(Number.isFinite(n.x) && Number.isFinite(n.y), n.id + " has a non-finite position");
+    assert.ok(n.w > 0 && n.h > 0, n.id + " has a non-positive size");
+    assert.ok(Number.isInteger(n.layer), n.id + " has no integer layer");
+  });
+  // The cards really are variable-sized: width follows the text, height rows.
+  assert.ok(new Set(all.nodes.map((n) => n.w)).size > 1, "card widths must vary with their text");
+  assert.ok(new Set(all.nodes.map((n) => n.h)).size > 1, "card heights must vary with their rows");
+  const width = Math.max(...all.nodes.map((n) => n.x + n.w)) - Math.min(...all.nodes.map((n) => n.x));
+  const height = Math.max(...all.nodes.map((n) => n.y + n.h)) - Math.min(...all.nodes.map((n) => n.y));
+  assert.ok(width > 0 && height > 0, "canvas must have positive bounds, got " + width + "x" + height);
+});
+
+test("laying out the same scene twice produces identical coordinates", () => {
+  const model = bigModel();
+  const idx = ui.indexModel(model);
+  const route = { view: "pkg", path: "example.com/big" };
+  const first = ui.buildScene(model, idx, route, true, { calls: true });
+  const second = ui.buildScene(model, idx, route, true, { calls: true });
+  assert.deepEqual(first.nodes, second.nodes);
+  assert.deepEqual(first.edges, second.edges);
+
+  const types = [mkType("A"), mkType("B"), mkType("C")];
+  const edges = chainEdges();
+  assert.deepEqual(
+    ui.layoutTypes({ name: "p" }, types, { all: true, edges }),
+    ui.layoutTypes({ name: "p" }, types, { all: true, edges })
+  );
+});
+
+test("adding a card does not change the layer of any existing card", () => {
+  const types = [mkType("A"), mkType("B"), mkType("C")];
+  const edges = chainEdges();
+  const base = ui.layoutTypes({ name: "p" }, types, { all: true, edges });
+
+  // An isolated card: it joins layer 0 without changing any existing path.
+  const withIsolated = ui.layoutTypes({ name: "p" }, types.concat([mkType("Z")]), { all: true, edges });
+  // A new leaf: it extends the chain but cannot lengthen a path to A, B or C.
+  const withLeaf = ui.layoutTypes({ name: "p" }, types.concat([mkType("D")]), {
+    all: true,
+    edges: edges.concat([{ from: "example.com/p#C", to: "example.com/p#D" }])
+  });
+
+  function layerMap(nodes) {
+    const m = {};
+    nodes.forEach((n) => { m[n.id] = n.layer; });
+    return m;
+  }
+  const baseLayers = layerMap(base);
+  for (const [label, nodes] of [["isolated", withIsolated], ["leaf", withLeaf]]) {
+    const next = layerMap(nodes);
+    for (const id of Object.keys(baseLayers)) {
+      assert.equal(next[id], baseLayers[id], `${label}: ${id} moved from layer ${baseLayers[id]} to ${next[id]}`);
+    }
+  }
+});
+
+test("adding an unrelated card keeps every other layer's order", () => {
+  // Two disconnected chains: A -> B and X -> Y.
+  const types = [mkType("A"), mkType("B"), mkType("X"), mkType("Y")];
+  const edges = [
+    { from: "example.com/p#A", to: "example.com/p#B" },
+    { from: "example.com/p#X", to: "example.com/p#Y" }
+  ];
+  const base = ui.layoutTypes({ name: "p" }, types, { all: true, edges });
+  const extra = ui.layoutTypes({ name: "p" }, types.concat([mkType("Z")]), { all: true, edges });
+
+  function byLayer(nodes) {
+    const out = new Map();
+    nodes.forEach((n) => {
+      if (!out.has(n.layer)) out.set(n.layer, []);
+      out.get(n.layer).push(n.id);
+    });
+    return out;
+  }
+  const baseLayers = byLayer(base);
+  const extraLayers = byLayer(extra);
+  const baseIds = new Set(base.map((n) => n.id));
+  for (const [layer, ids] of baseLayers) {
+    // The added card may sit in a base layer; only the existing relative
+    // order is part of the contract.
+    const kept = (extraLayers.get(layer) || []).filter((id) => baseIds.has(id));
+    assert.deepEqual(kept, ids, `layer ${layer} was reordered by an unrelated card`);
+  }
+});
+
+test("a synthetic cycle produces a marked back edge, not an endless rank walk", () => {
+  const model = cycleModel();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/cycle" }, true, { calls: true });
+
+  assert.equal(scene.nodes.length, 3);
+  const ends = drawableEdges(scene);
+  assert.equal(ends.length, 3, "the reference cycle keeps all three edges");
+  const back = ends.filter(({ e }) => e.back);
+  assert.equal(back.length, 1, "exactly one edge of the cycle must be marked back");
+  assert.equal(back[0].e.back, true);
+  for (const { e, a, b } of ends) {
+    if (e.back) continue;
+    assert.ok(b.layer > a.layer, `${e.from} -> ${e.to} must be layer-monotonic when it is not a back edge`);
+  }
+  // Every card still has a real position: the cycle break must not drop nodes.
+  scene.nodes.forEach((n) => {
+    assert.ok(Number.isFinite(n.x) && Number.isFinite(n.y), n.id + " is unplaced after cycle breaking");
+    assert.ok(Number.isInteger(n.layer), n.id + " has no layer after cycle breaking");
+  });
+});
+
+test("the horizontal-axis option is gone", () => {
+  assert.equal(ui.flowAxis, undefined, "flowAxis must be deleted, not left as a second code path");
+  for (const { name, scene } of flowScenes()) {
+    assert.equal(scene.axis, "v", name + ": every scene has the same top-down flow");
+  }
+  // The router takes two boxes; there is no axis argument to disagree about.
+  const a = { x: 0, y: 0, w: 100, h: 50 };
+  const b = { x: 300, y: 200, w: 100, h: 50 };
+  const p = parseEdgePath(ui.edgePath(a, b));
+  assert.deepEqual(p.start, [50, 50]);
+  assert.deepEqual(p.end, [350, 200]);
 });
