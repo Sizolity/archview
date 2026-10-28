@@ -690,7 +690,6 @@
         '<span class="count">' + vis(p.types).length + " 类型 · " + vis(p.funcs).length + " 函数</span></a></li>";
     });
     html += "</ul>";
-    html += '<h3>说明</h3><p class="doc">图中每个方框是一个模块，箭头表示依赖方向；单击选中，双击进入后显示该模块的类型卡片，字段与方法的类型可以继续点击。</p>';
     side.innerHTML = html;
   }
 
@@ -952,7 +951,14 @@
 
   var drag = null;
   var nodeDrag = null;
-  svg.addEventListener("mousedown", function (e) {
+  svg.addEventListener("click", function (e) {
+    // Clicking the empty canvas clears the selection: otherwise a selected card
+    // has no way back to the module overview.
+    if (e.target === svg && state.sel) {
+      state.sel = "";
+      render();
+    }
+  });  svg.addEventListener("mousedown", function (e) {
     if (e.target.closest(".node")) return;
     drag = { x: e.clientX, y: e.clientY, tx: state.tx, ty: state.ty };
     svg.classList.add("grabbing");
@@ -1094,9 +1100,22 @@
     cardhelp.addEventListener("click", function (ev) { ev.stopPropagation(); });
     document.addEventListener("click", function () { cardhelp.classList.remove("open"); });
     document.addEventListener("keydown", function (ev) {
-      if (ev.key === "Escape") cardhelp.classList.remove("open");
+      if (ev.key !== "Escape") return;
+      cardhelp.classList.remove("open");
+      if (state.sel) {
+        state.sel = "";
+        render();
+      }
     });
   }
+  // Escape clears a selected package card; the help panel's own handler lives
+  // inside a guard that no longer exists, so this one is unconditional.
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && state.sel) {
+      state.sel = "";
+      render();
+    }
+  });
   // ---------- boot ----------
 
   async function boot() {
