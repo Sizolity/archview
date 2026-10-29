@@ -8,15 +8,51 @@ workflow.
 
 ## Unreleased
 
-- Function and value cards can be selected like type cards: clicking one opens a
-  detail panel (`#/func/<id>`, `#/value/<id>`) with its package, position, doc,
-  CRAP (functions) and calls; double-click still opens the source.
+## [0.4.1] - 2026-10-30
 
-- Cards carry a hover tooltip with the untruncated text, and the elision line is
-  clickable to expand that card in place. Truncation now breaks at a word.
+### Added
 
-- Type cards show the printed declaration (	ype Server struct { … }), and
-  function cards show their doc comment, falling back to the signature.
+- One interaction model for every card: a single click selects (a package card
+  too, highlighting its import edges and opening its panel), a double click
+  drills into the package or opens the source. Clicking the empty canvas or
+  pressing Esc clears the selection.
+- Function and value cards can be selected like type cards: click opens a panel
+  (`#/func/<id>`, `#/value/<id>`) with the package, position, doc, CRAP and
+  calls; double-click opens the source.
+- The style legend sits in the canvas corner: card colours, the entry/change
+  markers, and the three line classes.
+- References to types and to package-level consts and vars are edges now
+  (`uses`/`value`), resolved through `go/types`: a function that returns a type
+  or reads a constant is connected to it. The model gains 140 edges here
+  (25 → 165), and a package like `internal/crap` stops looking empty.
+- Call edges connect the cards of one package (function to function, method to
+  its owner type); a cross-package call is drawn at module level only when no
+  import exists in that direction.
+- A cycle is first-class: strongly connected components are condensed, a scene
+  containing one shows `环(强连通): A ⇄ B` in a banner, and its edges are red
+  dashed. Layout-induced cross-row hops are a separate grey class (`span`).
+- Package cards show the package doc comment and the worst CRAP inside it.
+
+### Changed
+
+- The graph is laid out from its edges: Tarjan condensation, longest-path
+  layers, deterministic barycentre ordering, left-packed rows that wrap at
+  1300px and a fixed 120px gap. One flow direction per view; the horizontal
+  layout, its selector and the per-row grids are gone. `internal/model` with
+  every member shown went from 5,800×15,278 to 1,266×5,059.
+- The page is one renderer: `buildCard`, `drawNode` and `CARD_STYLE` plus pure
+  panel functions in `ui.js`; `ui.html` lost 300 lines, and one delegated
+  click/double-click handler and one card index replace the per-card closures.
+- `精简` and `聚焦` are gone; `调用边` draws declaration-level calls.
+- Cards can no longer be dragged: the position was never reapplied after a
+  render, and the drag could swallow the click that followed it.
+
+### Fixed
+
+- A single click could be lost: the scene was redrawn on every mouse move, so a
+  one-pixel wobble replaced the card under the pointer before the click fired.
+- A call edge between two cards in one row was routed bottom-to-top through its
+  target, hiding its arrowhead at a corner.
 
 ## [0.4.0] - 2026-10-29
 
