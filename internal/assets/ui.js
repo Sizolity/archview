@@ -494,12 +494,22 @@
   // A scene is laid out by one engine, and it always flows top to bottom:
   //
   //   1. assignLayers breaks cycles by depth-first back-edge detection and
-  //      gives every card the longest path from a root over the remaining
-  //      edges, so every non-back edge advances a layer;
+  //      then ranks the remaining DAG breadth-first from its roots. A card
+  //      takes its shortest path, not its longest, so a hub's dependents stay
+  //      near the top instead of being pushed under the deepest chain;
   //   2. orderLayers runs four deterministic barycenter passes over those
   //      edges, with the declaration ID as the final tie-break;
-  //   3. placeLayers sizes the variable cards, centres every layer, and widens
-  //      the vertical gutter until every edge falls further than it runs.
+  //   3. packRows lays every layer out as one left-aligned row with a fixed
+  //      card gap; a rank wider than ROW_MAX_W continues on the next row, and
+  //      placeLayers stacks the rows with a fixed rank gap. There is no column
+  //      model and no centring.
+  //
+  // The reference layout (unclebob/uml-viewer, engine/layout.clj) uses the same
+  // shape: class-gap 40 inside a rank, class-rank-gap 140 between ranks, margin
+  // 40, rows packed left to right. We use the compact end of the requested rank
+  // gap (120). This project's cards are up to 380px wide; one BFS rank of the
+  // repo model held 25 cards and measured 10,259px as a single row, so wrapping
+  // keeps the reference's row packing without turning the canvas into a strip.
   //
   // There is no axis option: `scene.axis` is the constant "v" and edgeRoute has
   // no horizontal branch to fall back on.
@@ -507,8 +517,14 @@
   var FLOW_AXIS = "v";
   var MARGIN = 40;
   var GAP_X = 40;
-  var GAP_Y = 72;
+  var GAP_Y = 120;
   var ORDER_PASSES = 4;
+  // A rank is normally one row, but a BFS rank of this project held 25 cards;
+  // a literal single row was 10,259px wide, wider than the old column layout.
+  // A row therefore wraps at 1300px: the overflow cards continue on the next
+  // layer, left to right, with the same GAP_X. Each layer is still one row, the
+  // rank order is preserved, and no card is widened or shrunk.
+  var ROW_MAX_W = 1300;
 
   function cmpID(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
 
@@ -517,8 +533,17 @@
   // assignLayers returns {layer, back}. The DFS starts at the indegree-zero
   // nodes in declaration-id order and then at every remaining node in that
   // order; an edge into the current DFS stack is a back edge and is removed
-  // before ranking. The remaining graph is acyclic, so the longest-path
-  // relaxation reaches a fixed point (and cannot run away on a cycle).
+  // before ranking. The remaining graph is acyclic, so a breadth-first walk
+  // from its roots finishes in one pass: each card takes the shortest path from
+  // a root, not the longest one. Roots are the nodes no remaining edge points
+  // at (falling back to every id). The queue is FIFO, adjacency and roots are
+  // id-sorted, and a node is ranked only on its first visit; the result is
+  // deterministic and independent of sort stability.
+  //
+  // Shortest paths do not make every DAG edge point downward: a cross edge can
+  // join two cards at the same rank, or point back up to a card that a shorter
+  // path reached first. layoutGraph marks those edges back as well, so the
+  // non-back edges keep the strict layer contract.
   function assignLayers(nodes, edges) {
     var ids = nodes.map(function (n) { return n.id; });
     var inSet = Object.create(null);
@@ -557,17 +582,42 @@
     ordered.forEach(function (id) { if (!color[id]) visit(id); });
 
     var kept = pairs.filter(function (p) { return !back[pairKey(p.from, p.to)]; });
+
+    // BFS over the DAG left after removing the cycle-closing edges. A node is
+    // ranked on first discovery, so its rank is the shortest path from any
+    // root. The kept graph is acyclic, so every node is reachable from a root
+    // and a single FIFO pass ranks all of them.
+    var keptOut = Object.create(null);
+    var keptIndeg = Object.create(null);
+    ids.forEach(function (id) {
+      keptOut[id] = [];
+      keptIndeg[id] = 0;
+    });
+    kept.forEach(function (p) {
+      if (keptOut[p.from].indexOf(p.to) < 0) keptOut[p.from].push(p.to);
+    });
+    Object.keys(keptOut).forEach(function (id) { keptOut[id].sort(cmpID); });
+    kept.forEach(function (p) { keptIndeg[p.to]++; });
+
+    var roots = ordered.filter(function (id) { return !keptIndeg[id]; });
+    if (!roots.length) roots = ordered;
+
     var layer = Object.create(null);
+    var ranked = Object.create(null);
     ids.forEach(function (id) { layer[id] = 0; });
-    for (var round = 0; round <= ids.length; round++) {
-      var changed = false;
-      kept.forEach(function (p) {
-        if (layer[p.to] < layer[p.from] + 1) {
-          layer[p.to] = layer[p.from] + 1;
-          changed = true;
-        }
+    var queue = [];
+    roots.forEach(function (id) {
+      ranked[id] = true;
+      queue.push(id);
+    });
+    for (var head = 0; head < queue.length; head++) {
+      var at = queue[head];
+      keptOut[at].forEach(function (next) {
+        if (ranked[next]) return; // first visit is the shortest path
+        ranked[next] = true;
+        layer[next] = layer[at] + 1;
+        queue.push(next);
       });
-      if (!changed) break;
     }
     return { layer: layer, back: back };
   }
@@ -578,40 +628,22 @@
     return assignLayers(nodes, edges).layer;
   }
 
-  // assignX sizes every column from its widest card and centres each layer on
-  // the same axis. It returns each card's centre x, which is the coordinate the
-  // ordering pass compares across layers (edges may skip a layer, so an
-  // in-layer index would compare the wrong things).
-  function assignX(layers) {
-    var maxCols = 0;
-    layers.forEach(function (list) { if (list.length > maxCols) maxCols = list.length; });
-    var colW = [];
-    var i;
-    for (i = 0; i < maxCols; i++) colW.push(0);
-    layers.forEach(function (list) {
-      list.forEach(function (n, at) {
-        if (n.w > colW[at]) colW[at] = n.w;
-      });
-    });
-
-    var totalW = 0;
-    var left = [];
-    for (i = 0; i < maxCols; i++) {
-      left.push(MARGIN + totalW);
-      totalW += colW[i] + (i ? GAP_X : 0);
-    }
-
+  // packRows is the row packer: every layer is one horizontal row, placed left
+  // to right from the same left margin with the same fixed gap. A card uses its
+  // own width and no column is sized by the widest card anywhere else, so a
+  // row's cards sit end to end with no empty slots. Layers are not centred.
+  // It returns each card's centre x, which is the coordinate the ordering pass
+  // compares across layers (edges may skip a layer, so an in-layer index would
+  // compare the wrong things).
+  function packRows(layers) {
     var centre = new Map();
     layers.forEach(function (list, li) {
-      var usedW = 0;
-      for (var j = 0; j < list.length; j++) usedW += colW[j] + (j ? GAP_X : 0);
-      var offset = (totalW - usedW) / 2;
-      list.forEach(function (n, at) {
-        // Centre the card inside its column too: a narrow card should not hug
-        // the gutter of a column sized by a wider card elsewhere.
-        n.x = Math.round(left[at] + offset + (colW[at] - n.w) / 2);
+      var x = MARGIN;
+      list.forEach(function (n) {
+        n.x = x;
         n.layer = li;
-        centre.set(n.id, n.x + n.w / 2);
+        centre.set(n.id, x + n.w / 2);
+        x += n.w + GAP_X;
       });
     });
     return centre;
@@ -624,7 +656,7 @@
   // declaration ID, making the result independent of sort stability.
   function orderLayers(layers, pred, succ) {
     var max = layers.length - 1;
-    var centre = assignX(layers);
+    var centre = packRows(layers);
     for (var pass = 0; pass < ORDER_PASSES; pass++) {
       var down = pass % 2 === 0;
       var seq = [];
@@ -648,54 +680,68 @@
         layers[li] = keyed.map(function (k) { return k.node; });
         // Recompute x after every layer: later layers in this pass see the
         // updated ordering, and no two passes share stale coordinates.
-        centre = assignX(layers);
+        centre = packRows(layers);
       });
     }
     return layers;
   }
 
-  // placeLayers gives the ordered layers boxes. assignX has already centred
-  // each layer; this adds the vertical coordinate. Each layer is as tall as its
-  // tallest card, and the gap between two layers grows for edges that run far
-  // horizontally, which is what keeps |dy| > |dx| a structural property of the
-  // layout instead of a property of the sample.
-  function placeLayers(layers, edges, byId) {
-    assignX(layers);
-    var i;
+  // wrapRows turns each ordered rank into one or more left-packed rows. A card
+  // that would push a row past ROW_MAX_W starts the next row, so a rank of many
+  // wide cards becomes a short stack of readable rows instead of one ribbon.
+  // Every row is still packed from the left margin with GAP_X and receives its
+  // own layer index, so the placement step can treat rows exactly like layers.
+  function wrapRows(layers) {
+    var out = [];
+    layers.forEach(function (list) {
+      var row = [];
+      var w = 0;
+      list.forEach(function (n) {
+        var add = n.w + (row.length ? GAP_X : 0);
+        if (row.length && w + add > ROW_MAX_W) {
+          out.push(row);
+          row = [];
+          w = 0;
+        }
+        row.push(n);
+        w += n.w + (row.length > 1 ? GAP_X : 0);
+      });
+      if (row.length) out.push(row);
+    });
+    out.forEach(function (list, li) {
+      list.forEach(function (n) { n.layer = li; });
+    });
+    return out;
+  }
 
+  // placeLayers gives the ordered layers boxes. packRows has already placed
+  // every row's x from the left margin; this adds the vertical coordinate. Each
+  // layer is as tall as its tallest card and rows are separated by the fixed
+  // GAP_Y, so the stack height depends on the cards, never on how far an edge
+  // runs sideways. Rows never share a y band and a row's cards are laid end to
+  // end, so no two cards can overlap.
+  function placeLayers(layers) {
+    packRows(layers);
     var heights = layers.map(function (list) {
       var h = 0;
       list.forEach(function (n) { if (n.h > h) h = n.h; });
       return h;
     });
 
-    var gaps = [];
-    var maxLayer = layers.length - 1;
-    for (i = 0; i < maxLayer; i++) gaps.push(GAP_Y);
-    edges.forEach(function (e) {
-      var a = byId.get(e.from);
-      var b = byId.get(e.to);
-      if (!a || !b || a.layer === b.layer) return;
-      var dx = Math.abs((b.x + b.w / 2) - (a.x + a.w / 2));
-      var lo = Math.min(a.layer, b.layer);
-      var hi = Math.max(a.layer, b.layer);
-      var need = Math.ceil(dx) + 1;
-      for (var k = lo; k < hi; k++) {
-        if (gaps[k] < need) gaps[k] = need;
-      }
-    });
-
     var y = MARGIN;
     layers.forEach(function (list, li) {
       list.forEach(function (n) { n.y = y; });
-      y += heights[li] + (gaps[li] || 0);
+      y += heights[li] + GAP_Y;
     });
     return layers;
   }
 
   // layoutGraph is the only layout entry point used by buildScene. It mutates
   // the cards with x/y/layer, marks back edges on the scene's own edge objects,
-  // and rewrites nodes into draw order (layer, then in-layer order).
+  // and rewrites nodes into draw order (layer, then in-layer order). A back
+  // edge is one that does not advance a final layer: a DFS cycle-closing edge,
+  // a shortest-path cross edge that points to its own row or above, or an edge
+  // that a wrapped row left behind.
   function layoutGraph(nodes, edges) {
     var byId = new Map();
     nodes.forEach(function (n) { byId.set(n.id, n); });
@@ -703,10 +749,6 @@
       return byId.has(e.from) && byId.has(e.to);
     });
     var res = assignLayers(nodes, usable);
-    usable.forEach(function (e) {
-      if (e.from === e.to || res.back[pairKey(e.from, e.to)]) e.back = true;
-      else delete e.back;
-    });
 
     var pred = new Map();
     var succ = new Map();
@@ -714,6 +756,9 @@
       pred.set(n.id, []);
       succ.set(n.id, []);
     });
+    // Cycle-closing edges were removed before ranking; a shortest-path cross
+    // edge is still a real relation and helps the barycenter order, even
+    // though it may not end up on a strictly deeper row.
     usable.forEach(function (e) {
       if (e.from === e.to || res.back[pairKey(e.from, e.to)]) return;
       if (succ.get(e.from).indexOf(e.to) >= 0) return;
@@ -735,8 +780,24 @@
       list.sort(function (a, b) { return cmpID(a.id, b.id); });
     });
 
+    // Order each rank first, then break rows that would overflow; order within
+    // the resulting rows once more so both the rank order and the row order see
+    // real neighbours.
     orderLayers(layers, pred, succ);
-    placeLayers(layers, usable, byId);
+    layers = wrapRows(layers);
+    orderLayers(layers, pred, succ);
+    placeLayers(layers);
+
+    // A back edge is only known once the final rows exist: a rank cross edge
+    // can still advance a row after wrapping, and only the wrapped rows decide
+    // which edges are healthy. Marking here keeps "non-back" exactly equal to
+    // "strictly deeper", while the DFS back table above keeps cycle-closing
+    // edges out of the barycenter input.
+    usable.forEach(function (e) {
+      if (e.from === e.to || res.back[pairKey(e.from, e.to)] ||
+          byId.get(e.to).layer <= byId.get(e.from).layer) e.back = true;
+      else delete e.back;
+    });
 
     var flat = [];
     layers.forEach(function (list) {
@@ -760,10 +821,11 @@
     return edges;
   }
 
-  // layoutPackages puts packages in longest-import-path layers: a package sits
-  // one layer below everything it imports. The scene passes its own edge
-  // objects, so a call-only edge participates in layering and can be marked
-  // back on the same object that drawEdges later renders.
+  // layoutPackages puts packages in shortest-import-path layers: a package sits
+  // below everything it imports, at the depth of its first (shortest) import
+  // chain. The scene passes its own edge objects, so a call-only edge
+  // participates in layering and can be marked back on the same object that
+  // drawEdges later renders.
   function layoutPackages(pkgs, pkgByPath, opts) {
     opts = opts || {};
     var all = !!opts.all;
@@ -1522,9 +1584,10 @@
   // the arrowhead is never painted inside the card. A back edge is the same
   // port pair pointing up: it is a loop, not a second direction.
   //
-  // There is no axis argument. The layer engine guarantees that two connected
-  // cards are never in the same layer, so there is no same-row case that would
-  // need a horizontal fallback; adding one back would recreate the bug.
+  // There is no axis argument and no horizontal fallback, even though a
+  // shortest-path cross edge may join two cards at the same layer or point up:
+  // the ports stay bottom/top and the curve simply bends back. Adding an axis
+  // or a side port would recreate the two-direction bug.
   function edgeRoute(a, b) {
     var sx = a.x + a.w / 2, sy = a.y + a.h;
     var ex = b.x + b.w / 2, ey = b.y;

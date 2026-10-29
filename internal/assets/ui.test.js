@@ -564,6 +564,35 @@ test("rankTypes puts dependencies below their users", () => {
   assert.equal(rank["example.com/p#C"], 2);
 });
 
+test("shortest-path ranks lift a converging node above its longest chain", () => {
+  const types = [mkType("A"), mkType("B"), mkType("C")];
+  const edges = [
+    { from: "example.com/p#A", to: "example.com/p#B" },
+    { from: "example.com/p#A", to: "example.com/p#C" },
+    { from: "example.com/p#B", to: "example.com/p#C" }
+  ];
+  const rank = ui.rankTypes(types, edges);
+  assert.equal(rank["example.com/p#A"], 0);
+  assert.equal(rank["example.com/p#B"], 1);
+  // BFS keeps C at the depth of its direct A -> C edge. The old longest-path
+  // relaxation put C at 2 because of A -> B -> C; that is the rank the shortest
+  // walk is meant to remove.
+  assert.equal(rank["example.com/p#C"], 1);
+
+  const pkg = { name: "p" };
+  const cards = types.map((t) => ui.typeCard(t, pkg, { all: true }));
+  const sceneEdges = edges.map((e) => ({ from: e.from, to: e.to }));
+  ui.layoutGraph(cards, sceneEdges);
+  const byId = new Map(cards.map((n) => [n.id, n]));
+  const bc = sceneEdges.find((e) => e.from === "example.com/p#B" && e.to === "example.com/p#C");
+  assert.equal(bc.back, true, "a same-row cross edge is a layer-breaking edge");
+  for (const e of sceneEdges) {
+    if (e.back) continue;
+    assert.ok(byId.get(e.to).layer > byId.get(e.from).layer,
+      `${e.from} -> ${e.to} must still point to a deeper layer`);
+  }
+});
+
 test("layer layout stacks users above dependencies", () => {
   const types = [mkType("A"), mkType("B"), mkType("C")];
   const nodes = ui.layoutTypes({ name: "p" }, types, {
@@ -1394,8 +1423,10 @@ test("regression: a call between two function cards is layered, not side-routed"
   const sb = assertBorderCentre(p.end, b, "function call end");
   assert.equal(sa, "bottom");
   assert.equal(sb, "top");
-  assert.ok(Math.abs(p.end[1] - p.start[1]) > Math.abs(p.end[0] - p.start[0]),
-    "the function call must be predominantly vertical");
+  // The arrowhead is drawn at the path end, so the end is the target's top
+  // centre. Compact rows do not promise a vertical tangent: the running order
+  // can place the two cards side by side within their rows.
+  assert.deepEqual(p.end, [b.x + b.w / 2, b.y]);
 });
 
 test("an edge approaches both boxes from outside, so its arrowhead is not buried in a card", () => {
@@ -1536,6 +1567,45 @@ function bigModel() {
   };
 }
 
+// compactModel is the 40-card compactness fixture: five ranks of eight short
+// types, with each rank's head referencing every card of the next rank. The old
+// centred-column layout had to widen its vertical gutter to the full 8-card row
+// span for every hop; the row packer wraps each rank into two rows instead.
+function compactModel() {
+  const p = "example.com/fan";
+  const types = [];
+  const ids = [];
+  for (let r = 0; r < 5; r++) {
+    ids.push([]);
+    for (let i = 0; i < 8; i++) {
+      const name = "T" + r + i;
+      const id = p + "#" + name;
+      ids[r].push(id);
+      types.push({
+        id,
+        name,
+        kind: "struct",
+        exported: true,
+        pos: "fan.go:" + (r * 8 + i + 1),
+        fields: [{ name: "f", type: "int", exported: true }],
+        methods: []
+      });
+    }
+  }
+  for (let r = 0; r + 1 < 5; r++) {
+    types[r * 8].fields = ids[r + 1].map((id, i) => ({
+      name: "to" + i,
+      type: id.split("#")[1],
+      exported: true,
+      refs: [id]
+    }));
+  }
+  return {
+    path: p,
+    packages: [{ path: p, name: "fan", imports: [], types, funcs: [], consts: [], vars: [] }]
+  };
+}
+
 // homeModel is four packages, two import edges and one isolated package.
 function homeModel() {
   const p = "example.com/home";
@@ -1626,22 +1696,27 @@ test("every non-back edge points to a strictly deeper layer", () => {
   assert.ok(backs >= 1, "the cycle scene must contribute at least one back edge");
 });
 
-test("every edge is predominantly vertical with bottom-centre and top-centre ports", () => {
+test("every edge uses bottom-centre and top-centre ports, with the arrow at the target", () => {
   for (const { name, scene } of flowScenes()) {
     for (const { e, a, b } of drawableEdges(scene)) {
-      const d = ui.edgePath(a, b);
-      const p = parseEdgePath(d);
+      const route = ui.edgeRoute(a, b);
+      const p = parseEdgePath(route.d);
       const where = `${name}: ${e.from} -> ${e.to}${e.back ? " (back)" : ""}`;
+      assert.equal(route.start.side, "bottom", `${where}: the route must leave the bottom`);
+      assert.equal(route.end.side, "top", `${where}: the route must enter the top`);
       assert.ok(Math.abs(p.start[0] - (a.x + a.w / 2)) <= 1,
-        `${where}: starts at x=${p.start[0]}, not the bottom centreline ${a.x + a.w / 2} (${d})`);
+        `${where}: starts at x=${p.start[0]}, not the bottom centreline ${a.x + a.w / 2} (${route.d})`);
       assert.ok(Math.abs(p.start[1] - (a.y + a.h)) <= 1,
-        `${where}: starts at y=${p.start[1]}, not the source bottom ${a.y + a.h} (${d})`);
+        `${where}: starts at y=${p.start[1]}, not the source bottom ${a.y + a.h} (${route.d})`);
       assert.ok(Math.abs(p.end[0] - (b.x + b.w / 2)) <= 1,
-        `${where}: ends at x=${p.end[0]}, not the top centreline ${b.x + b.w / 2} (${d})`);
+        `${where}: ends at x=${p.end[0]}, not the top centreline ${b.x + b.w / 2} (${route.d})`);
       assert.ok(Math.abs(p.end[1] - b.y) <= 1,
-        `${where}: ends at y=${p.end[1]}, not the target top ${b.y} (${d})`);
-      assert.ok(Math.abs(p.end[1] - p.start[1]) > Math.abs(p.end[0] - p.start[0]),
-        `${where}: edge is not predominantly vertical (${d})`);
+        `${where}: ends at y=${p.end[1]}, not the target top ${b.y} (${route.d})`);
+      // The arrow is bound to the path end in ui.html (marker-end). The end
+      // point is the target's top centre, so the head lands on the target's
+      // border rather than in the gap. No |dy| > |dx| check: row packing can
+      // put a compact edge at any slope, and only the ports are the contract.
+      assert.deepEqual(p.end, [b.x + b.w / 2, b.y]);
     }
   }
 });
@@ -1676,6 +1751,61 @@ test("forty-plus cards lay out without overlaps and grow the canvas", () => {
   const width = Math.max(...all.nodes.map((n) => n.x + n.w)) - Math.min(...all.nodes.map((n) => n.x));
   const height = Math.max(...all.nodes.map((n) => n.y + n.h)) - Math.min(...all.nodes.map((n) => n.y));
   assert.ok(width > 0 && height > 0, "canvas must have positive bounds, got " + width + "x" + height);
+  // Measured with the centred-column + adaptive-gutter layout that preceded
+  // this change (ui.js at the previous commit): 1602 x 3655 = 5,855,310 px^2
+  // for this same all=true scene. The row packer must stay smaller.
+  const OLD_AREA = 5855310;
+  assert.ok(width * height < OLD_AREA,
+    `42 cards cover ${Math.round(width)}x${Math.round(height)} = ${Math.round(width * height)} px^2, ` +
+    `not less than the old ${OLD_AREA} px^2`);
+});
+
+test("each layer is one left-packed row with no empty column slot", () => {
+  const model = compactModel();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/fan" }, true, { calls: true });
+  const layers = new Map();
+  scene.nodes.forEach((n) => {
+    if (!layers.has(n.layer)) layers.set(n.layer, []);
+    layers.get(n.layer).push(n);
+  });
+  assert.equal(layers.size, 10, "five 8-card ranks wrap into two rows each");
+  for (const [layer, list] of layers) {
+    list.sort((a, b) => a.x - b.x);
+    assert.equal(list[0].x, 40, `layer ${layer} must start at the left margin`);
+    for (let i = 1; i < list.length; i++) {
+      // The row is contiguous: no column is sized by another layer, so there
+      // is no empty slot between two cards in the same row.
+      assert.equal(list[i].x, list[i - 1].x + list[i - 1].w + 40,
+        `layer ${layer}: ${list[i - 1].title} and ${list[i].title} are not one fixed gap apart`);
+    }
+  }
+});
+
+test("forty cards fit a smaller canvas than the centred-column layout", () => {
+  const model = compactModel();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/fan" }, true, { calls: true });
+  assert.equal(scene.nodes.length, 40, "the compactness fixture must stay at 40 cards");
+
+  let overlapsFound = 0;
+  for (let i = 0; i < scene.nodes.length; i++) {
+    for (let j = i + 1; j < scene.nodes.length; j++) {
+      if (overlaps(scene.nodes[i], scene.nodes[j])) overlapsFound++;
+    }
+  }
+  assert.equal(overlapsFound, 0, overlapsFound + " overlapping pairs out of 40 cards");
+
+  const width = Math.max(...scene.nodes.map((n) => n.x + n.w)) - Math.min(...scene.nodes.map((n) => n.x));
+  const height = Math.max(...scene.nodes.map((n) => n.y + n.h)) - Math.min(...scene.nodes.map((n) => n.y));
+  // Measured with the centred-column + adaptive-gutter layout that preceded
+  // this change (ui.js at the previous commit): 1840 x 4615 = 8,491,600 px^2
+  // for this same 40-card model. Keeping the constant here makes a regression
+  // back to columns or adaptive gaps fail instead of silently passing.
+  const OLD_AREA = 8491600;
+  assert.ok(width * height < OLD_AREA,
+    `40 cards cover ${Math.round(width)}x${Math.round(height)} = ${Math.round(width * height)} px^2, ` +
+    `not less than the old ${OLD_AREA} px^2`);
 });
 
 test("laying out the same scene twice produces identical coordinates", () => {

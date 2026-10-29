@@ -198,7 +198,7 @@
         <span class="ln" style="border-top-color:#0891b2" title="静态调用;虚线为接口调用"></span><small>调用</small>
         <span class="ln" style="border-top-color:#dc2626;border-top-width:3px" title="分层违规:下层依赖上层"></span><small>违规</small></div>
       <div><b>跨包</b> <span class="ln" style="border-top-color:#0d9488;border-top-style:dashed" title="跨包调用,且两包之间没有同向 import"></span><small>跨包调用(无 import)</small></div>
-      <div><b>回边</b> <span class="ln" style="border-top-color:#d97706;border-top-style:dashed" title="依赖环上被打破的一条边;它指回上层"></span><small>环回边</small></div>
+      <div><b>回边</b> <span class="ln" style="border-top-color:#d97706;border-top-style:dashed" title="不向下跨层的边:环路边,或同层/反向的跨层边"></span><small>环/跨层边</small></div>
     </div>  </section>
   <aside id="side"></aside>
 </main>
@@ -395,7 +395,7 @@
       if (!e.ref) {
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on. A callOnly edge names the absent import.
-        var lead = e.back ? "回边(环路): " : (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : ""));
+        var lead = e.back ? "回边(环/跨层): " : (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : ""));
         p.appendChild(svgEl("title", {}, lead + e.from + " → " + e.to));
       }
       world.appendChild(p);
@@ -615,7 +615,7 @@
       "拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码 · 自上而下" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
-      " · 橙色虚线 = 回边 · 箭头指向被依赖方 · ▾ 折叠成员";
+      " · 橙色虚线 = 回边/跨层 · 箭头指向被依赖方 · ▾ 折叠成员";
   }
 
   // ---------- binding ----------
