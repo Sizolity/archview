@@ -311,10 +311,10 @@
         funcById.set(f.id, { id: f.id, name: f.name, owner: "", pkg: p });
       });
       (p.consts || []).forEach(function (v) {
-        valueByID.set(p.path + "#" + v.name, { pkg: p, decl: v });
+        valueByID.set(v.id || (p.path + "#" + v.name), { pkg: p, decl: v });
       });
       (p.vars || []).forEach(function (v) {
-        valueByID.set(p.path + "#" + v.name, { pkg: p, decl: v });
+        valueByID.set(v.id || (p.path + "#" + v.name), { pkg: p, decl: v });
       });
     });
 
@@ -459,7 +459,7 @@
       node.changed = typeChanged(decl);
       node.href = typeHash(decl.id);
     } else {
-      var id = kind === "func" ? (decl.id || (pkg.path + "#" + decl.name)) : (pkg.path + "#" + decl.name);
+      var id = decl.id || (pkg.path + "#" + decl.name);
       node.id = id;
       node.title = decl.name;
       if (kind === "func") {
@@ -1346,18 +1346,48 @@
     tnodes.forEach(function (n) { byId.set(n.id, n); });
 
     // Relation pairs are needed before layout (they are the layer constraints)
-    // and again for drawing, so they are computed once.
+    // and again for drawing, so they are computed once. model.edges and the
+    // field refs describe the same type-to-type relation from two sources, so
+    // they share one dedupe key; a method ID folds onto its owner type card.
     var pairs = typePairs(types, idx);
-    var tedges = pairs.filter(function (e) {
-      return byId.has(e.from) && byId.has(e.to);
-    });
+    var tedges = [];
+    var edgeSeen = Object.create(null);
+
+    function edgeCardID(id) {
+      if (byId.has(id)) return id;
+      var owner = ownerTypeID(id);
+      return owner && byId.has(owner) ? owner : "";
+    }
+
+    function addSceneEdge(e) {
+      var from = edgeCardID(e.from);
+      var to = edgeCardID(e.to);
+      if (!from || !to || from === to) return;
+      var style = e.kind || (e.ref ? "ref" : "");
+      var key = from + "\u0000" + to + "\u0000" + style;
+      if (edgeSeen[key]) return;
+      edgeSeen[key] = true;
+      var edge = { from: from, to: to };
+      if (e.kind) edge.kind = e.kind;
+      if (e.ref !== undefined) edge.ref = e.ref;
+      tedges.push(edge);
+    }
+
+    pairs.forEach(addSceneEdge);
 
     // implements / embeds come from go/types and get their own line style, so
-    // a reader can tell the three relations apart at a glance.
+    // a reader can tell the three relations apart at a glance. uses and value
+    // come from the same go/types reference pass: a type reuse keeps the ref
+    // line, a const/var read gets the value style. Both ends must have a card
+    // in this view, which is also how a hidden (unexported) target drops its
+    // edge.
     (model.edges || []).forEach(function (e) {
-      if (e.kind !== "implements" && e.kind !== "embeds") return;
-      if (!byId.has(e.from) || !byId.has(e.to)) return;
-      tedges.push({ from: e.from, to: e.to, kind: e.kind });
+      if (e.kind === "uses") {
+        addSceneEdge({ from: e.from, to: e.to, ref: true });
+        return;
+      }
+      if (e.kind !== "implements" && e.kind !== "embeds" && e.kind !== "value") return;
+      addSceneEdge({ from: e.from, to: e.to, kind: e.kind });
     });
 
     // Call edges stay at declaration level: a package-level function has its

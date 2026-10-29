@@ -20,11 +20,16 @@ const (
 	EdgeUses       = "uses"
 	EdgeImplements = "implements"
 	EdgeEmbeds     = "embeds"
+	// EdgeValue links a declaration to a package-level const or var it reads.
+	// It carries the same "<import path>#<Name>" shape as a type ID so the UI
+	// can resolve it to the value card without a second namespace.
+	EdgeValue = "value"
 )
 
-// Edge is an explicit relation between two types of the model. Both ends are
-// type IDs of the form "<import path>#<TypeName>"; package-level functions are
-// not nodes yet, that arrives with the call graph.
+// Edge is an explicit relation between two declarations of the model. Both
+// ends are "<import path>#<Name>" IDs: a type, a "<Type>.<Method>" method, a
+// package-level function or a const/var. Edges from a function/method body are
+// function IDs, while the UI folds a method onto its owner type card.
 type Edge struct {
 	Kind string `json:"kind"`
 	From string `json:"from"`

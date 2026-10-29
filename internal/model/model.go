@@ -3,9 +3,10 @@
 //
 // The scan is a pipeline — `go list` for the package layout, go/parser for the
 // declarations, go/types for what the syntax alone cannot answer (interface
-// satisfaction, embedding), and a body walk for the call graph. A package that
-// fails to type-check becomes a warning on the model instead of aborting the
-// scan, so a module that is mid-edit still renders.
+// satisfaction, embedding, identifier resolution), and a body walk for the call
+// graph and the references a declaration makes. A package that fails to
+// type-check becomes a warning on the model instead of aborting the scan, so a
+// module that is mid-edit still renders.
 package model
 
 import (
@@ -118,8 +119,10 @@ type FuncInfo struct {
 	raw      *ast.FuncType
 }
 
-// ValueInfo is a constant or variable.
+// ValueInfo is a constant or variable. ID is "<import path>#<Name>", the same
+// shape a card and a reference edge use.
 type ValueInfo struct {
+	ID       string `json:"id,omitempty"`
 	Name     string `json:"name"`
 	Type     string `json:"type,omitempty"`
 	Value    string `json:"value,omitempty"`
@@ -212,6 +215,7 @@ func loadModule(ctx context.Context, dir string, cfg *config.Config, scope func(
 			pkgs[path] = c.pkg
 		}
 		edges = append(edges, relations(pkgs, modelIDs(m.Packages))...)
+		edges = append(edges, referenceEdges(checked, m.Packages)...)
 		callScope := scope
 		if callScope == nil {
 			callScope = func(path string) bool {
@@ -451,7 +455,7 @@ func (b *builder) parseFile(f *ast.File) {
 						val = exprText(b.fset, vs.Values[0])
 					}
 					for _, nm := range vs.Names {
-						v := &ValueInfo{Name: nm.Name, Type: tv, Value: val, Doc: doc,
+						v := &ValueInfo{ID: valueID(b.pkgPath, nm.Name), Name: nm.Name, Type: tv, Value: val, Doc: doc,
 							Pos: b.pos(nm.Pos()), Exported: nm.IsExported()}
 						if dd.Tok == token.CONST {
 							b.rootDoc.Consts = append(b.rootDoc.Consts, v)

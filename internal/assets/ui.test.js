@@ -1,6 +1,8 @@
 // Tests for the pure UI helpers in ui.js. Run with `node --test`.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const ui = require("./ui.js");
 
 function fixture() {
@@ -1241,6 +1243,56 @@ test("implements edges to a hidden package are not drawn", () => {
   const idx = ui.indexModel(model);
   const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
   assert.equal(scene.edges.filter((e) => e.kind).length, 0);
+});
+
+test("value edges keep kind value and drop with a hidden value card", () => {
+  const model = fixture();
+  const pkg = model.packages[0];
+  pkg.funcs[0].id = "example.com/app#New";
+  pkg.consts = [{ id: "example.com/app#k", name: "k", value: "3", exported: false }];
+  model.edges = [
+    { kind: "value", from: "example.com/app#New", to: "example.com/app#k" }
+  ];
+  const idx = ui.indexModel(model);
+
+  // The default view hides unexported values, so the target card (and with it
+  // the edge) is gone even though the model carries the relation.
+  const filtered = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+  assert.equal(filtered.nodes.some((n) => n.id === "example.com/app#k"), false);
+  assert.deepEqual(filtered.edges.filter((e) => e.kind === "value"), []);
+
+  // With "含未导出" on, the edge is drawn and keeps the value style marker.
+  const shown = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, true);
+  assert.equal(shown.nodes.some((n) => n.id === "example.com/app#k"), true);
+  const values = shown.edges.filter((e) => e.kind === "value");
+  assert.deepEqual(values, [
+    { from: "example.com/app#New", to: "example.com/app#k", kind: "value" }
+  ]);
+});
+
+test("value edges have a solid style that loses to cycle", () => {
+  const html = fs.readFileSync(path.join(__dirname, "ui.html"), "utf8");
+  const base = html.indexOf(".edge {");
+  const value = html.indexOf(".edge.value {");
+  const cycle = html.indexOf(".edge.cycle {");
+  assert.ok(base >= 0 && value > base, "value must override the default .edge style");
+  assert.ok(cycle > value, "a cycle must override the value style");
+  assert.match(html, /\.edge\.value\s*\{[^}]*stroke:\s*#[0-9a-f]{6}[^}]*stroke-dasharray:\s*none/i);
+  assert.ok(html.includes("引用常量/变量"), "the legend must explain the value line");
+});
+
+test("a model uses edge folds a method onto its owner type card", () => {
+  const model = fixture();
+  model.edges = [
+    { kind: "uses", from: "example.com/app#Server.Start", to: "example.com/app#App" }
+  ];
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/app" }, false);
+  const refs = scene.edges.filter((e) => e.ref).map((e) => e.from + ">" + e.to);
+  assert.deepEqual(refs, [
+    "example.com/app#App>example.com/app#Server",
+    "example.com/app#Server>example.com/app#App"
+  ]);
 });
 
 

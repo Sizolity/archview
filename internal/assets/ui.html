@@ -127,6 +127,9 @@
   .edge.emb { stroke: #2563eb; }
   /* A layout-induced cross-row hop: neutral grey, never a cycle. */
   .edge.span { stroke: #94a3b8; stroke-dasharray: 2 3; }
+  /* A reference to a package-level const/var. Solid and distinct from a type
+     reference; a cycle below still overrides it. */
+  .edge.value { stroke: #b45309; stroke-dasharray: none; }
   /* A layer violation keeps its red line even when wrapping stretched it. */
   .edge.violation { stroke: #dc2626; stroke-width: 1.9; }
   /* Last: a cycle is the strongest fact, red dashed even when it is also a
@@ -201,6 +204,7 @@
         <span class="ln" style="border-top-color:#8b5cf6;border-top-style:dashed" title="字段/签名引用"></span><small>uses</small>
         <span class="ln" style="border-top-color:#16a34a" title="实现接口"></span><small>implements</small>
         <span class="ln" style="border-top-color:#2563eb" title="嵌入"></span><small>embeds</small>
+        <span class="ln" style="border-top-color:#b45309" title="函数/方法体或初始化式引用常量/变量"></span><small>引用常量/变量</small>
         <span class="ln" style="border-top-color:#0891b2" title="静态调用;虚线为接口调用"></span><small>调用</small>
         <span class="ln" style="border-top-color:#dc2626;border-top-width:3px" title="分层违规:下层依赖上层"></span><small>违规</small></div>
       <div><b>跨包</b> <span class="ln" style="border-top-color:#0d9488;border-top-style:dashed" title="跨包调用,且两包之间没有同向 import"></span><small>跨包调用(无 import)</small></div>
@@ -360,6 +364,7 @@
     { id: "arrow-emb", fill: "#2563eb" },
     { id: "arrow-call", fill: "#0891b2" },
     { id: "arrow-callonly", fill: "#0d9488" },
+    { id: "arrow-value", fill: "#b45309" },
     { id: "arrow-violation", fill: "#dc2626" },
     { id: "arrow-span", fill: "#94a3b8" },
     { id: "arrow-cycle", fill: "#dc2626" }
@@ -368,6 +373,7 @@
   function markerFor(e) {
     if (e.cycle) return "arrow-cycle";
     if (e.violation) return "arrow-violation";
+    if (e.kind === "value") return "arrow-value";
     if (e.span) return "arrow-span";
     if (e.callOnly) return "arrow-callonly";
     if (e.call) return "arrow-call";
@@ -385,6 +391,7 @@
     if (e.ref) cls += " ref";
     if (e.kind === "implements") cls += " impl";
     if (e.kind === "embeds") cls += " emb";
+    if (e.kind === "value") cls += " value";
     if (e.callOnly) cls += " callonly";
     if (e.call) cls += " call" + (e.dynamic ? " dynamic" : "");
     if (e.span) cls += " span";
@@ -424,7 +431,8 @@
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on. A callOnly edge names the absent import.
         var lead = e.cycle ? "环(强连通): " : (e.span ? "跨行(换行): " :
-          (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : "")));
+          (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " :
+            (e.kind === "value" ? "引用常量/变量: " : ""))));
         p.appendChild(svgEl("title", {}, lead + e.from + " → " + e.to));
       }
       world.appendChild(p);

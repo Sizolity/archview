@@ -166,6 +166,12 @@ func funcID(pkgPath, name string) string {
 	return fmt.Sprintf("%s#%s", pkgPath, name)
 }
 
+// valueID is the model ID for a package-level const or var. The UI already
+// addresses value cards by this shape, so the edge can name one directly.
+func valueID(pkgPath, name string) string {
+	return fmt.Sprintf("%s#%s", pkgPath, name)
+}
+
 // methodID is the model ID for a method of a named type.
 func methodID(pkgPath, typeName, name string) string {
 	return fmt.Sprintf("%s#%s.%s", pkgPath, typeName, name)

@@ -49,8 +49,9 @@ func TestLoadRelations(t *testing.T) {
 		}
 	}
 
-	// Every endpoint must be a node the browser can navigate to.
-	ids := modelIDs(m.Packages)
+	// Every endpoint must be a declaration the browser can navigate to: a
+	// type, a method, a package-level function or a const/var.
+	ids := declarationIDs(m.Packages)
 	for _, e := range m.Edges {
 		if !ids[e.From] || !ids[e.To] {
 			t.Errorf("边指向未知节点: %+v", e)
