@@ -564,7 +564,226 @@ test("rankTypes puts dependencies below their users", () => {
   assert.equal(rank["example.com/p#C"], 2);
 });
 
-test("shortest-path ranks lift a converging node above its longest chain", () => {
+// ---------- 3.1 condensation depth: topology first, cycles surfaced ----------
+//
+// The contract is topological, not a graph walk: cycles are condensed first,
+// the condensation is a DAG by construction, and a component's depth is the
+// longest path over it. A shortest-path/BFS walk would flatten the diamond
+// below; these tests fail on that layout.
+
+// condenseInfo maps every scene card onto the SCC that owns it.
+function condenseInfo(scene) {
+  const compOf = new Map();
+  scene.components.forEach((members, i) => {
+    members.forEach((id) => compOf.set(id, i));
+  });
+  return compOf;
+}
+
+test("condense returns every node's component and an acyclic condensation", () => {
+  const p = (name) => "example.com/p#" + name;
+  const types = ["A", "B", "C", "D", "E"].map((n) => mkType(n));
+  const edges = [
+    { from: p("A"), to: p("B") },
+    { from: p("B"), to: p("C") },
+    { from: p("C"), to: p("A") }, // {A,B,C} is one SCC
+    { from: p("B"), to: p("B") }, // a self-loop must not become a component edge
+    { from: p("B"), to: p("D") },
+    { from: p("C"), to: p("D") }, // duplicate at component level
+    { from: p("D"), to: p("E") },
+    { from: p("E"), to: p("D") } // {D,E} is one SCC
+  ];
+  const c = ui.condense(types, edges);
+
+  assert.equal(c.components.length, 2);
+  types.forEach((t) => {
+    assert.ok(Number.isInteger(c.compOf[t.id]), t.id + " has no component");
+    assert.ok(c.components[c.compOf[t.id]].includes(t.id), t.id + " is not in its own component");
+  });
+  const members = c.components.map((m) => m.slice().sort()).sort();
+  assert.deepEqual(members, [[p("A"), p("B"), p("C")].sort(), [p("D"), p("E")].sort()]);
+
+  // No self-loop survives, and the two B/C -> D dependencies are one edge.
+  assert.equal(c.compEdges.length, 1);
+  assert.deepEqual(c.compEdges[0], { from: c.compOf[p("A")], to: c.compOf[p("D")] });
+  assert.ok(!c.compEdges.some((e) => e.from === e.to), "the condensation has no self-loop");
+
+  // Kahn over the component edges must consume every component.
+  const indeg = c.components.map(() => 0);
+  c.compEdges.forEach((e) => { indeg[e.to]++; });
+  const queue = indeg.map((d, i) => (d === 0 ? i : -1)).filter((i) => i >= 0);
+  let seen = 0;
+  for (let head = 0; head < queue.length; head++) {
+    seen++;
+    c.compEdges.forEach((e) => {
+      if (e.from !== queue[head]) return;
+      if (--indeg[e.to] === 0) queue.push(e.to);
+    });
+  }
+  assert.equal(seen, c.components.length, "the condensation must be acyclic");
+
+  // Longest path over the condensation: the {d,e} component sits one step
+  // below the {a,b,c} component, even though a->d is also a direct edge.
+  assert.equal(c.compRank[c.compOf[p("A")]], 0);
+  assert.equal(c.compRank[c.compOf[p("D")]], 1);
+});
+
+test("depth comes from the longest path over the condensation, not a BFS", () => {
+  const p = (name) => "example.com/p#" + name;
+  const diamond = [
+    { from: p("A"), to: p("B") },
+    { from: p("A"), to: p("C") },
+    { from: p("B"), to: p("D") },
+    { from: p("C"), to: p("D") }
+  ];
+  const types = ["A", "B", "C", "D"].map((n) => mkType(n));
+  const rank = ui.rankTypes(types, diamond);
+  assert.equal(rank[p("A")], 0);
+  assert.equal(rank[p("B")], 1);
+  assert.equal(rank[p("C")], 1);
+  assert.equal(rank[p("D")], 2, "a converging node keeps its longest depth, not its shortest");
+
+  const chain = ui.rankTypes([mkType("a"), mkType("b"), mkType("c")], [
+    { from: p("a"), to: p("b") },
+    { from: p("b"), to: p("c") }
+  ]);
+  assert.deepEqual([chain[p("a")], chain[p("b")], chain[p("c")]], [0, 1, 2]);
+
+  // A diamond keeps D at 2 under both a BFS and a longest path. The triangle is
+  // the discriminator: the direct A -> C edge makes a BFS rank C at 1, while
+  // C's C-after-B chain makes the topological depth 2.
+  const triangle = ui.rankTypes(types.filter((t) => t.name !== "D"), [
+    { from: p("A"), to: p("B") },
+    { from: p("A"), to: p("C") },
+    { from: p("B"), to: p("C") }
+  ]);
+  assert.equal(triangle[p("C")], 2, "a BFS would flatten C to 1");
+
+  // The cards drawn for the diamond carry the same depth, and no BFS flattening
+  // leaves a non-cycle edge on its source's row.
+  const nodes = ui.layoutTypes({ name: "p" }, types, { all: true, edges: diamond });
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  assert.equal(byId.get(p("D")).rank, 2);
+  for (const e of diamond) {
+    const a = byId.get(e.from);
+    const b = byId.get(e.to);
+    assert.ok(b.rank > a.rank, `${e.from} -> ${e.to} must descend a rank`);
+    assert.ok(b.layer > a.layer, `${e.from} -> ${e.to} must descend a row`);
+  }
+});
+
+test("cycle edges exist exactly for SCCs of two or more cards", () => {
+  for (const { name, scene } of flowScenes()) {
+    const compOf = condenseInfo(scene);
+    const big = scene.components.map((m) => m.length >= 2);
+    let cycleEdges = 0;
+    for (const { e } of drawableEdges(scene)) {
+      const same = compOf.get(e.from) === compOf.get(e.to) && big[compOf.get(e.from)];
+      if (same) {
+        assert.equal(e.cycle, true,
+          `${name}: ${e.from} -> ${e.to} is inside one SCC and must be a cycle edge`);
+        assert.equal(compOf.get(e.from), compOf.get(e.to),
+          `${name}: a cycle edge must join one component`);
+        cycleEdges++;
+      } else {
+        assert.ok(!e.cycle,
+          `${name}: ${e.from} -> ${e.to} crosses components but is marked cycle`);
+      }
+    }
+    assert.equal(cycleEdges > 0, big.some(Boolean),
+      `${name}: cycle edges must exist exactly when an SCC has two or more cards`);
+  }
+});
+
+test("span edges are produced only by wrapRows, and only for short hops", () => {
+  const model = compactModel();
+  const idx = ui.indexModel(model);
+  const wrapped = ui.buildScene(model, idx, { view: "pkg", path: "example.com/fan" }, true, { calls: true });
+  const ranks = new Set(wrapped.nodes.map((n) => n.rank));
+  const rows = new Set(wrapped.nodes.map((n) => n.layer));
+  assert.ok(rows.size > ranks.size, "the compact fixture must split a rank into several rows");
+  let spans = 0;
+  for (const { e, a, b } of drawableEdges(wrapped)) {
+    if (!e.span) continue;
+    spans++;
+    assert.ok(!e.cycle, "an edge cannot be both cycle and span");
+    const rankDiff = b.rank - a.rank;
+    assert.ok(rankDiff >= 0 && rankDiff <= 1, "span is a same-rank or adjacent-rank hop");
+    assert.ok(b.layer - a.layer > rankDiff, "wrapRows added the extra rows, not the topology");
+  }
+  assert.ok(spans > 0, "a wrapped scene must have at least one span edge");
+
+  const flatModel = homeModel();
+  const flatIdx = ui.indexModel(flatModel);
+  const flat = ui.buildScene(flatModel, flatIdx, { view: "home" }, true, { calls: true });
+  assert.ok(flat.nodes.every((n) => n.layer === n.rank), "the home fixture must not need wrapping");
+  assert.equal(flat.edges.filter((e) => e.span).length, 0,
+    "an unwrapped scene must not produce span edges");
+});
+
+test("every non-cycle, non-span edge goes to a strictly deeper rank", () => {
+  let checked = 0;
+  let cycles = 0;
+  let spans = 0;
+  for (const { name, scene } of flowScenes()) {
+    for (const { e, a, b } of drawableEdges(scene)) {
+      assert.ok(Number.isInteger(a.rank), `${name}: ${a.id} has no integer condensation rank`);
+      assert.ok(Number.isInteger(b.rank), `${name}: ${b.id} has no integer condensation rank`);
+      if (e.cycle) {
+        cycles++;
+        assert.equal(a.rank, b.rank, `${name}: cycle edge ${e.from} -> ${e.to} must share a rank`);
+        continue;
+      }
+      if (e.span) {
+        spans++;
+        assert.ok(b.layer > a.layer, `${name}: span edge ${e.from} -> ${e.to} must still point down a row`);
+        continue;
+      }
+      assert.ok(b.rank > a.rank,
+        `${name}: ${e.from} (rank ${a.rank}) -> ${e.to} (rank ${b.rank}) must go to a deeper rank`);
+      assert.ok(b.layer > a.layer,
+        `${name}: ${e.from} (layer ${a.layer}) -> ${e.to} (layer ${b.layer}) must go to a deeper row`);
+      checked++;
+    }
+  }
+  assert.ok(checked >= 20, "expected many ordinary edges, got " + checked);
+  assert.ok(cycles >= 3, "the cycle scene must mark all three edges, got " + cycles);
+  assert.ok(spans >= 0, "span count is reported, not required in every scene");
+});
+
+test("an SCC of two or more cards adds one deterministic warning line to the scene", () => {
+  const model = cycleModel();
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/cycle" }, true, { calls: true });
+  assert.equal(scene.components.length, 1);
+  assert.deepEqual(scene.components[0], [
+    "example.com/cycle#A", "example.com/cycle#B", "example.com/cycle#C"
+  ]);
+  assert.equal(typeof scene.cycleWarning, "string");
+  assert.match(scene.cycleWarning, /环\(强连通\)/);
+  for (const n of ["A", "B", "C"]) {
+    assert.ok(scene.cycleWarning.includes(n), "the warning must list " + n);
+  }
+  const again = ui.buildScene(model, idx, { view: "pkg", path: "example.com/cycle" }, true, { calls: true });
+  assert.equal(again.cycleWarning, scene.cycleWarning, "the warning line is deterministic");
+
+  const flatModel = bigModel();
+  const flatIdx = ui.indexModel(flatModel);
+  const flat = ui.buildScene(flatModel, flatIdx, { view: "pkg", path: "example.com/big" }, true, { calls: true });
+  assert.ok(flat.components.every((c) => c.length === 1), "the big fixture has no SCC of two cards");
+  assert.equal(flat.cycleWarning, null, "no cycle line when every SCC is a single card");
+});
+
+test("the old back classification is gone, not kept beside cycle and span", () => {
+  for (const { name, scene } of flowScenes()) {
+    for (const e of scene.edges) {
+      assert.equal(Object.prototype.hasOwnProperty.call(e, "back"), false,
+        `${name}: ${e.from} -> ${e.to} still carries the old back flag`);
+    }
+  }
+});
+
+test("longest-path ranks keep a converging node at its deepest chain", () => {
   const types = [mkType("A"), mkType("B"), mkType("C")];
   const edges = [
     { from: "example.com/p#A", to: "example.com/p#B" },
@@ -574,22 +793,23 @@ test("shortest-path ranks lift a converging node above its longest chain", () =>
   const rank = ui.rankTypes(types, edges);
   assert.equal(rank["example.com/p#A"], 0);
   assert.equal(rank["example.com/p#B"], 1);
-  // BFS keeps C at the depth of its direct A -> C edge. The old longest-path
-  // relaxation put C at 2 because of A -> B -> C; that is the rank the shortest
-  // walk is meant to remove.
-  assert.equal(rank["example.com/p#C"], 1);
+  // The direct A -> C edge is shorter, but C also sits below B. Topological
+  // depth follows the longest chain, so C is 2; a BFS would flatten it to 1.
+  assert.equal(rank["example.com/p#C"], 2);
 
   const pkg = { name: "p" };
   const cards = types.map((t) => ui.typeCard(t, pkg, { all: true }));
   const sceneEdges = edges.map((e) => ({ from: e.from, to: e.to }));
   ui.layoutGraph(cards, sceneEdges);
   const byId = new Map(cards.map((n) => [n.id, n]));
-  const bc = sceneEdges.find((e) => e.from === "example.com/p#B" && e.to === "example.com/p#C");
-  assert.equal(bc.back, true, "a same-row cross edge is a layer-breaking edge");
+  assert.equal(byId.get("example.com/p#C").rank, 2);
   for (const e of sceneEdges) {
-    if (e.back) continue;
+    assert.equal(e.cycle, undefined, `${e.from} -> ${e.to} is not a cycle`);
+    assert.equal(e.span, undefined, `${e.from} -> ${e.to} is not layout-stretched`);
+    assert.ok(byId.get(e.to).rank > byId.get(e.from).rank,
+      `${e.from} -> ${e.to} must point to a deeper rank`);
     assert.ok(byId.get(e.to).layer > byId.get(e.from).layer,
-      `${e.from} -> ${e.to} must still point to a deeper layer`);
+      `${e.from} -> ${e.to} must point to a deeper row`);
   }
 });
 
@@ -1376,7 +1596,7 @@ test("every edge endpoint sits on the centre of a border of the box it connects"
   }
 });
 
-test("every edge uses bottom and top ports, including back edges", () => {
+test("every edge uses bottom and top ports, including cycle and span edges", () => {
   const { scenes } = invariantScenes();
   for (const { name, scene } of scenes) {
     eachSceneEdge(name, scene, ({ a, b, e, d }) => {
@@ -1385,9 +1605,11 @@ test("every edge uses bottom and top ports, including back edges", () => {
       const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
       assert.equal(sa, "bottom", `${name}: ${e.from}->${e.to} must leave the bottom (${d})`);
       assert.equal(sb, "top", `${name}: ${e.from}->${e.to} must enter the top (${d})`);
-      if (e.back) return;
+      // A cycle edge may point across or even up a wrapped row; its style still
+      // owns the same port pair. Every other edge descends a row.
+      if (e.cycle) return;
       assert.ok(b.layer > a.layer,
-        `${name}: non-back edge ${e.from} (${a.layer}) -> ${e.to} (${b.layer}) must move down a layer`);
+        `${name}: ${e.from} (${a.layer}) -> ${e.to} (${b.layer}) must move down a row`);
     });
   }
 });
@@ -1677,23 +1899,39 @@ function flowScenes() {
   ];
 }
 
-test("every non-back edge points to a strictly deeper layer", () => {
+test("flow scenes keep cycle, span and normal dependency disjoint", () => {
   let checked = 0;
-  let backs = 0;
+  let cycles = 0;
+  let spans = 0;
   for (const { name, scene } of flowScenes()) {
     const ends = drawableEdges(scene);
     assert.ok(ends.length > 0, name + ": scene has no drawable edges");
     for (const { e, a, b } of ends) {
-      assert.ok(Number.isInteger(a.layer), `${name}: ${a.id} has no integer layer`);
-      assert.ok(Number.isInteger(b.layer), `${name}: ${b.id} has no integer layer`);
-      if (e.back) { backs++; continue; }
+      assert.ok(Number.isInteger(a.rank), `${name}: ${a.id} has no integer rank`);
+      assert.ok(Number.isInteger(b.rank), `${name}: ${b.id} has no integer rank`);
+      assert.ok(!(e.cycle && e.span), `${name}: ${e.from} -> ${e.to} is both cycle and span`);
+      if (e.cycle) {
+        cycles++;
+        assert.equal(a.rank, b.rank,
+          `${name}: cycle edge ${e.from} -> ${e.to} must share a component rank`);
+        continue;
+      }
+      if (e.span) {
+        spans++;
+        assert.ok(b.layer > a.layer,
+          `${name}: span edge ${e.from} -> ${e.to} must still point down a row`);
+        continue;
+      }
+      assert.ok(b.rank > a.rank,
+        `${name}: ${e.from} (rank ${a.rank}) -> ${e.to} (rank ${b.rank}) must deepen`);
       assert.ok(b.layer > a.layer,
-        `${name}: non-back edge ${e.from} (layer ${a.layer}) -> ${e.to} (layer ${b.layer}) must point down a layer`);
+        `${name}: ${e.from} (row ${a.layer}) -> ${e.to} (row ${b.layer}) must point down a row`);
       checked++;
     }
   }
-  assert.ok(checked >= 20, "expected the fixture set to exercise many non-back edges, got " + checked);
-  assert.ok(backs >= 1, "the cycle scene must contribute at least one back edge");
+  assert.ok(checked >= 20, "expected the fixture set to exercise many normal edges, got " + checked);
+  assert.ok(cycles >= 3, "the cycle scene must contribute all three cycle edges, got " + cycles);
+  assert.ok(spans >= 0, "span count is reported, not required in every scene");
 });
 
 test("every edge uses bottom-centre and top-centre ports, with the arrow at the target", () => {
@@ -1701,7 +1939,8 @@ test("every edge uses bottom-centre and top-centre ports, with the arrow at the 
     for (const { e, a, b } of drawableEdges(scene)) {
       const route = ui.edgeRoute(a, b);
       const p = parseEdgePath(route.d);
-      const where = `${name}: ${e.from} -> ${e.to}${e.back ? " (back)" : ""}`;
+      const where = `${name}: ${e.from} -> ${e.to}` +
+        (e.cycle ? " (cycle)" : (e.span ? " (span)" : ""));
       assert.equal(route.start.side, "bottom", `${where}: the route must leave the bottom`);
       assert.equal(route.end.side, "top", `${where}: the route must enter the top`);
       assert.ok(Math.abs(p.start[0] - (a.x + a.w / 2)) <= 1,
@@ -1881,26 +2120,68 @@ test("adding an unrelated card keeps every other layer's order", () => {
   }
 });
 
-test("a synthetic cycle produces a marked back edge, not an endless rank walk", () => {
+test("a synthetic cycle is one component and every intra-cycle edge is marked cycle", () => {
   const model = cycleModel();
   const idx = ui.indexModel(model);
   const scene = ui.buildScene(model, idx, { view: "pkg", path: "example.com/cycle" }, true, { calls: true });
 
   assert.equal(scene.nodes.length, 3);
+  assert.equal(scene.components.length, 1, "A -> B -> C -> A is one SCC");
+  const compOf = condenseInfo(scene);
   const ends = drawableEdges(scene);
   assert.equal(ends.length, 3, "the reference cycle keeps all three edges");
-  const back = ends.filter(({ e }) => e.back);
-  assert.equal(back.length, 1, "exactly one edge of the cycle must be marked back");
-  assert.equal(back[0].e.back, true);
   for (const { e, a, b } of ends) {
-    if (e.back) continue;
-    assert.ok(b.layer > a.layer, `${e.from} -> ${e.to} must be layer-monotonic when it is not a back edge`);
+    assert.equal(e.cycle, true, `${e.from} -> ${e.to} must be a cycle edge, not a broken edge`);
+    assert.equal(e.span, undefined, "a cycle edge is not a layout span");
+    assert.equal(compOf.get(e.from), compOf.get(e.to), "both ends of a cycle edge share the SCC");
+    assert.equal(a.rank, b.rank, "every card of one SCC has the same rank");
   }
-  // Every card still has a real position: the cycle break must not drop nodes.
+  // Every card still has a real position: a cycle must not drop nodes, and the
+  // rank must stay 0 for the whole component (one topological level).
   scene.nodes.forEach((n) => {
-    assert.ok(Number.isFinite(n.x) && Number.isFinite(n.y), n.id + " is unplaced after cycle breaking");
-    assert.ok(Number.isInteger(n.layer), n.id + " has no layer after cycle breaking");
+    assert.ok(Number.isFinite(n.x) && Number.isFinite(n.y), n.id + " is unplaced");
+    assert.equal(n.rank, 0, n.id + " must share the component's rank");
+    assert.ok(Number.isInteger(n.layer), n.id + " has no drawn row");
   });
+});
+
+test("a cycle that wrapping splits across rows still uses bottom and top ports", () => {
+  const p = "example.com/wcycle";
+  const types = [];
+  for (let i = 0; i < 8; i++) {
+    const next = (i + 1) % 8;
+    types.push({
+      id: p + "#T" + i, name: "T" + i, kind: "struct", exported: true, pos: "w.go:" + (i + 1),
+      fields: [{ name: "next", type: "T" + next, exported: true, refs: [p + "#T" + next] }],
+      methods: []
+    });
+  }
+  const model = {
+    path: p,
+    packages: [{ path: p, name: "wcycle", imports: [], types, funcs: [], consts: [], vars: [] }]
+  };
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: p }, true, {});
+  assert.equal(scene.nodes.length, 8);
+  assert.equal(scene.components.length, 1, "one 8-card ring is one SCC");
+  const rows = new Set(scene.nodes.map((n) => n.layer));
+  assert.ok(rows.size > 1, "eight 200px cards must wrap into more than one row");
+
+  let upward = 0;
+  for (const { e, a, b } of drawableEdges(scene)) {
+    assert.equal(e.cycle, true, `${e.from} -> ${e.to} belongs to the ring and must be a cycle edge`);
+    const route = ui.edgeRoute(a, b);
+    assert.equal(route.start.side, "bottom");
+    assert.equal(route.end.side, "top");
+    const parsed = parseEdgePath(route.d);
+    assert.deepEqual(parsed.end, [b.x + b.w / 2, b.y]);
+    assert.ok(Math.abs(parsed.start[1] - (a.y + a.h)) <= 1);
+    if (b.layer < a.layer) upward++;
+  }
+  assert.ok(upward >= 1, "wrapping must make at least one cycle edge point back up a row");
+  // The banner names the whole ring, not only the first two cards.
+  assert.match(scene.cycleWarning, /环\(强连通\)/);
+  for (let i = 0; i < 8; i++) assert.ok(scene.cycleWarning.includes("T" + i));
 });
 
 test("the horizontal-axis option is gone", () => {

@@ -493,23 +493,29 @@
   //
   // A scene is laid out by one engine, and it always flows top to bottom:
   //
-  //   1. assignLayers breaks cycles by depth-first back-edge detection and
-  //      then ranks the remaining DAG breadth-first from its roots. A card
-  //      takes its shortest path, not its longest, so a hub's dependents stay
-  //      near the top instead of being pushed under the deepest chain;
+  //   1. condense finds the strongly connected components with Tarjan. The
+  //      condensation is a DAG by construction, so its depth is the longest
+  //      path over component edges; every card of one SCC shares that rank.
+  //      There is no BFS and no cycle-closing edge to remove: a DAG gets its
+  //      real topological depth, and a cycle stays a cycle;
   //   2. orderLayers runs four deterministic barycenter passes over those
   //      edges, with the declaration ID as the final tie-break;
-  //   3. packRows lays every layer out as one left-aligned row with a fixed
+  //   3. packRows lays every rank out as one left-aligned row with a fixed
   //      card gap; a rank wider than ROW_MAX_W continues on the next row, and
   //      placeLayers stacks the rows with a fixed rank gap. There is no column
   //      model and no centring.
   //
+  // After placement every edge carries one of three classes: `cycle` (its two
+  // cards are in the same SCC), `span` (a same/adjacent-rank hop that wrapping
+  // stretched over extra rows) or neither (a normal dependency). The old
+  // "back" flag mixed the first and second meaning and is gone.
+  //
   // The reference layout (unclebob/uml-viewer, engine/layout.clj) uses the same
   // shape: class-gap 40 inside a rank, class-rank-gap 140 between ranks, margin
   // 40, rows packed left to right. We use the compact end of the requested rank
-  // gap (120). This project's cards are up to 380px wide; one BFS rank of the
-  // repo model held 25 cards and measured 10,259px as a single row, so wrapping
-  // keeps the reference's row packing without turning the canvas into a strip.
+  // gap (120). This project's cards are up to 380px wide; one rank of the repo
+  // model held 25 cards and measured 10,259px as a single row, so wrapping keeps
+  // the reference's row packing without turning the canvas into a strip.
   //
   // There is no axis option: `scene.axis` is the constant "v" and edgeRoute has
   // no horizontal branch to fall back on.
@@ -519,7 +525,7 @@
   var GAP_X = 40;
   var GAP_Y = 120;
   var ORDER_PASSES = 4;
-  // A rank is normally one row, but a BFS rank of this project held 25 cards;
+  // A rank is normally one row, but one rank of this project held 25 cards;
   // a literal single row was 10,259px wide, wider than the old column layout.
   // A row therefore wraps at 1300px: the overflow cards continue on the next
   // layer, left to right, with the same GAP_X. Each layer is still one row, the
@@ -530,102 +536,202 @@
 
   function pairKey(from, to) { return from + "\u0000" + to; }
 
-  // assignLayers returns {layer, back}. The DFS starts at the indegree-zero
-  // nodes in declaration-id order and then at every remaining node in that
-  // order; an edge into the current DFS stack is a back edge and is removed
-  // before ranking. The remaining graph is acyclic, so a breadth-first walk
-  // from its roots finishes in one pass: each card takes the shortest path from
-  // a root, not the longest one. Roots are the nodes no remaining edge points
-  // at (falling back to every id). The queue is FIFO, adjacency and roots are
-  // id-sorted, and a node is ranked only on its first visit; the result is
-  // deterministic and independent of sort stability.
+  // condense implements Tarjan's strongly connected components over the drawn
+  // dependency graph. It is deterministic: roots are visited in declaration-id
+  // order and neighbours in edge order (deduplicated by first occurrence), so
+  // two runs over the same scene produce the same components in the same
+  // order. Self-loops are ignored for the adjacency and never become a
+  // component edge.
   //
-  // Shortest paths do not make every DAG edge point downward: a cross edge can
-  // join two cards at the same rank, or point back up to a card that a shorter
-  // path reached first. layoutGraph marks those edges back as well, so the
-  // non-back edges keep the strict layer contract.
-  function assignLayers(nodes, edges) {
-    var ids = nodes.map(function (n) { return n.id; });
+  // It returns:
+  //   components  one array of card IDs per SCC (members sorted by ID)
+  //   compOf      node ID -> component index
+  //   compEdges   component-level edges, deduplicated, no self-loops
+  //   compRank    longest path over the condensation: a root has rank 0 and
+  //               every other component is 1 + the max rank of its
+  //               predecessors. The condensation is a DAG by construction, so
+  //               one Kahn pass is enough and every component is reached.
+  //
+  // The component order is Tarjan's discovery order; ranks do not depend on it.
+  function condense(nodes, edges) {
     var inSet = Object.create(null);
-    ids.forEach(function (id) { inSet[id] = true; });
+    var ids = [];
+    (nodes || []).forEach(function (n) {
+      if (inSet[n.id]) return;
+      inSet[n.id] = true;
+      ids.push(n.id);
+    });
+    var ordered = ids.slice().sort(cmpID);
 
+    // Adjacency in edge order, with duplicate pairs dropped (Tarjan only cares
+    // that a neighbour exists, not how many edges name it).
     var out = Object.create(null);
-    var indeg = Object.create(null);
+    ordered.forEach(function (id) { out[id] = []; });
     var seen = Object.create(null);
-    var pairs = [];
-    ids.forEach(function (id) { indeg[id] = 0; });
     (edges || []).forEach(function (e) {
-      if (!inSet[e.from] || !inSet[e.to] || e.from === e.to) return;
+      if (e.from === e.to || !inSet[e.from] || !inSet[e.to]) return;
       var k = pairKey(e.from, e.to);
       if (seen[k]) return;
       seen[k] = true;
-      pairs.push({ from: e.from, to: e.to });
-      (out[e.from] = out[e.from] || []).push(e.to);
-      indeg[e.to]++;
+      out[e.from].push(e.to);
     });
-    Object.keys(out).forEach(function (id) { out[id].sort(cmpID); });
 
-    var ordered = ids.slice().sort(cmpID);
-    var roots = ordered.filter(function (id) { return !indeg[id]; });
+    // Iterative Tarjan: an explicit frame stack avoids a call-stack limit on a
+    // long dependency chain, and low-link/on-stack state are plain tables.
+    var index = 0;
+    var order = Object.create(null);  // discovery index, absent before a visit
+    var low = Object.create(null);
+    var onStack = Object.create(null);
+    var stack = [];
+    var components = [];
+    var compOf = Object.create(null);
 
-    var color = Object.create(null);
-    var back = Object.create(null);
-    function visit(id) {
-      color[id] = 1;
-      (out[id] || []).forEach(function (next) {
-        if (color[next] === 1) back[pairKey(id, next)] = true;
-        else if (!color[next]) visit(next);
-      });
-      color[id] = 2;
+    ordered.forEach(function (root) {
+      if (order[root] != null) return;
+      order[root] = low[root] = index++;
+      stack.push(root);
+      onStack[root] = true;
+      var frames = [{ id: root, next: 0 }];
+      while (frames.length) {
+        var frame = frames[frames.length - 1];
+        var v = frame.id;
+        var neighbours = out[v];
+        if (frame.next < neighbours.length) {
+          var w = neighbours[frame.next++];
+          if (order[w] == null) {
+            order[w] = low[w] = index++;
+            stack.push(w);
+            onStack[w] = true;
+            frames.push({ id: w, next: 0 });
+          } else if (onStack[w] && order[w] < low[v]) {
+            low[v] = order[w];
+          }
+          continue;
+        }
+        frames.pop();
+        if (low[v] === order[v]) {
+          var members = [];
+          for (;;) {
+            var member = stack.pop();
+            onStack[member] = false;
+            compOf[member] = components.length;
+            members.push(member);
+            if (member === v) break;
+          }
+          components.push(members.sort(cmpID));
+        }
+        if (frames.length) {
+          var parent = frames[frames.length - 1].id;
+          if (low[v] < low[parent]) low[parent] = low[v];
+        }
+      }
+    });
+
+    // Component-level edges: dedupe the aggregated pairs and drop the ones that
+    // stay inside one SCC (a self-loop at component level).
+    var compEdges = [];
+    var seenComp = Object.create(null);
+    (edges || []).forEach(function (e) {
+      if (e.from === e.to || !inSet[e.from] || !inSet[e.to]) return;
+      var from = compOf[e.from];
+      var to = compOf[e.to];
+      if (from === to) return;
+      var k = from + "\u0000" + to;
+      if (seenComp[k]) return;
+      seenComp[k] = true;
+      compEdges.push({ from: from, to: to });
+    });
+
+    // Longest path over the condensation. Kahn's order guarantees a component
+    // is final before it relaxes its successors; taking the max is the longest
+    // path, so a converging DAG keeps its deepest predecessor.
+    var count = components.length;
+    var compOut = [];
+    var indeg = [];
+    var compRank = [];
+    var i;
+    for (i = 0; i < count; i++) {
+      compOut.push([]);
+      indeg.push(0);
+      compRank.push(0);
     }
-    roots.forEach(function (id) { if (!color[id]) visit(id); });
-    ordered.forEach(function (id) { if (!color[id]) visit(id); });
-
-    var kept = pairs.filter(function (p) { return !back[pairKey(p.from, p.to)]; });
-
-    // BFS over the DAG left after removing the cycle-closing edges. A node is
-    // ranked on first discovery, so its rank is the shortest path from any
-    // root. The kept graph is acyclic, so every node is reachable from a root
-    // and a single FIFO pass ranks all of them.
-    var keptOut = Object.create(null);
-    var keptIndeg = Object.create(null);
-    ids.forEach(function (id) {
-      keptOut[id] = [];
-      keptIndeg[id] = 0;
+    compEdges.forEach(function (ce) {
+      compOut[ce.from].push(ce.to);
+      indeg[ce.to]++;
     });
-    kept.forEach(function (p) {
-      if (keptOut[p.from].indexOf(p.to) < 0) keptOut[p.from].push(p.to);
-    });
-    Object.keys(keptOut).forEach(function (id) { keptOut[id].sort(cmpID); });
-    kept.forEach(function (p) { keptIndeg[p.to]++; });
-
-    var roots = ordered.filter(function (id) { return !keptIndeg[id]; });
-    if (!roots.length) roots = ordered;
-
-    var layer = Object.create(null);
-    var ranked = Object.create(null);
-    ids.forEach(function (id) { layer[id] = 0; });
     var queue = [];
-    roots.forEach(function (id) {
-      ranked[id] = true;
-      queue.push(id);
-    });
+    for (i = 0; i < count; i++) if (!indeg[i]) queue.push(i);
     for (var head = 0; head < queue.length; head++) {
       var at = queue[head];
-      keptOut[at].forEach(function (next) {
-        if (ranked[next]) return; // first visit is the shortest path
-        ranked[next] = true;
-        layer[next] = layer[at] + 1;
-        queue.push(next);
+      compOut[at].forEach(function (next) {
+        if (compRank[next] < compRank[at] + 1) compRank[next] = compRank[at] + 1;
+        indeg[next]--;
+        if (!indeg[next]) queue.push(next);
       });
     }
-    return { layer: layer, back: back };
+    return {
+      components: components,
+      compOf: compOf,
+      compEdges: compEdges,
+      compRank: compRank
+    };
   }
 
-  // rankTypes is the public view of the layer step. The back-edge table stays
-  // internal to layoutGraph, which marks the scene's own edge objects.
+  // assignLayers turns the condensation into a per-node rank. All members of a
+  // component share its longest-path rank; layoutGraph later keeps that rank on
+  // n.rank while n.layer becomes the drawn row after wrapping.
+  function assignLayers(nodes, edges) {
+    var res = condense(nodes, edges);
+    var layer = Object.create(null);
+    (nodes || []).forEach(function (n) {
+      var comp = res.compOf[n.id];
+      layer[n.id] = comp == null ? 0 : res.compRank[comp];
+    });
+    return {
+      layer: layer,
+      components: res.components,
+      compOf: res.compOf,
+      compEdges: res.compEdges,
+      compRank: res.compRank
+    };
+  }
+
+  // rankTypes is the public view of the rank step: per-node longest-path rank
+  // over the condensation. Cycle and span marking stays on the scene's own edge
+  // objects in layoutGraph.
   function rankTypes(nodes, edges) {
     return assignLayers(nodes, edges).layer;
+  }
+
+  // cycleName shortens a card ID for a warning line: pkg#Type -> Type and
+  // pkg/path -> path.
+  function cycleName(id) {
+    var s = String(id || "");
+    var hash = s.lastIndexOf("#");
+    if (hash >= 0) s = s.slice(hash + 1);
+    var slash = s.lastIndexOf("/");
+    return slash >= 0 ? s.slice(slash + 1) : s;
+  }
+
+  // cyclicComponents returns the SCCs that contain a real cycle (two or more
+  // cards), member-sorted and ordered by first declaration ID. Singletons are
+  // not cycles.
+  function cyclicComponents(components) {
+    return (components || [])
+      .filter(function (c) { return c.length >= 2; })
+      .map(function (c) { return c.slice().sort(cmpID); })
+      .sort(function (a, b) { return cmpID(a[0], b[0]); });
+  }
+
+  // cycleWarning is the one deterministic line the scene shows when its graph
+  // is not a DAG: "环(强连通): a ⇄ b". It returns null when every SCC is one
+  // card, so a healthy architecture grows no banner.
+  function cycleWarning(components) {
+    var cycles = cyclicComponents(components);
+    if (!cycles.length) return null;
+    return "环(强连通): " + cycles.map(function (c) {
+      return c.map(cycleName).join(" ⇄ ");
+    }).join(" · ");
   }
 
   // packRows is the row packer: every layer is one horizontal row, placed left
@@ -737,12 +843,14 @@
   }
 
   // layoutGraph is the only layout entry point used by buildScene. It mutates
-  // the cards with x/y/layer, marks back edges on the scene's own edge objects,
-  // and rewrites nodes into draw order (layer, then in-layer order). A back
-  // edge is one that does not advance a final layer: a DFS cycle-closing edge,
-  // a shortest-path cross edge that points to its own row or above, or an edge
-  // that a wrapped row left behind.
-  function layoutGraph(nodes, edges) {
+  // the cards with x/y/rank/layer, classifies the scene's own edge objects,
+  // rewrites nodes into draw order (row, then in-row order), and fills `meta`
+  // (when given) with the condensation buildScene reports to the page.
+  //
+  // n.rank is the card's topological depth: every card of one SCC shares it.
+  // n.layer is the drawn row after wrapRows, so it is always >= n.rank. A card
+  // that wraps to a later row keeps its rank; only its geometric row moves.
+  function layoutGraph(nodes, edges, meta) {
     var byId = new Map();
     nodes.forEach(function (n) { byId.set(n.id, n); });
     var usable = (edges || []).filter(function (e) {
@@ -750,32 +858,36 @@
     });
     var res = assignLayers(nodes, usable);
 
+    // Barycenter input: every real relation, including intra-SCC edges, so a
+    // cycle's members are ordered next to each other. Parallel edges count once
+    // so a second call between the same cards cannot outweigh a type reference.
     var pred = new Map();
     var succ = new Map();
     nodes.forEach(function (n) {
       pred.set(n.id, []);
       succ.set(n.id, []);
     });
-    // Cycle-closing edges were removed before ranking; a shortest-path cross
-    // edge is still a real relation and helps the barycenter order, even
-    // though it may not end up on a strictly deeper row.
+    var pairs = Object.create(null);
     usable.forEach(function (e) {
-      if (e.from === e.to || res.back[pairKey(e.from, e.to)]) return;
-      if (succ.get(e.from).indexOf(e.to) >= 0) return;
+      if (e.from === e.to) return;
+      var k = pairKey(e.from, e.to);
+      if (pairs[k]) return;
+      pairs[k] = true;
       succ.get(e.from).push(e.to);
       pred.get(e.to).push(e.from);
     });
     pred.forEach(function (list) { list.sort(cmpID); });
     succ.forEach(function (list) { list.sort(cmpID); });
 
-    var maxLayer = 0;
+    var maxRank = 0;
     nodes.forEach(function (n) {
-      n.layer = res.layer[n.id] || 0;
-      if (n.layer > maxLayer) maxLayer = n.layer;
+      n.rank = res.layer[n.id] || 0;
+      n.layer = n.rank;
+      if (n.rank > maxRank) maxRank = n.rank;
     });
     var layers = [];
-    for (var l = 0; l <= maxLayer; l++) layers.push([]);
-    nodes.forEach(function (n) { layers[n.layer].push(n); });
+    for (var l = 0; l <= maxRank; l++) layers.push([]);
+    nodes.forEach(function (n) { layers[n.rank].push(n); });
     layers.forEach(function (list) {
       list.sort(function (a, b) { return cmpID(a.id, b.id); });
     });
@@ -788,16 +900,35 @@
     orderLayers(layers, pred, succ);
     placeLayers(layers);
 
-    // A back edge is only known once the final rows exist: a rank cross edge
-    // can still advance a row after wrapping, and only the wrapped rows decide
-    // which edges are healthy. Marking here keeps "non-back" exactly equal to
-    // "strictly deeper", while the DFS back table above keeps cycle-closing
-    // edges out of the barycenter input.
+    // Three classes, recorded on the scene's own edge objects:
+    //   cycle  both ends are in one SCC of two or more cards. Red dashed; the
+    //          edge stays a cycle however the rows are packed.
+    //   span   a same-rank or adjacent-rank hop that wrapRows stretched over
+    //          extra rows (rank difference 0/1, row difference greater). The
+    //          extra distance is layout, not topology, so it is neutral grey.
+    //   normal neither: its endpoints are in different components and the edge
+    //          descends at least one rank and one row.
     usable.forEach(function (e) {
-      if (e.from === e.to || res.back[pairKey(e.from, e.to)] ||
-          byId.get(e.to).layer <= byId.get(e.from).layer) e.back = true;
-      else delete e.back;
+      delete e.cycle;
+      delete e.span;
+      if (e.from === e.to) return;
+      var from = res.compOf[e.from];
+      var to = res.compOf[e.to];
+      if (from === to) {
+        if (res.components[from].length >= 2) e.cycle = true;
+        return;
+      }
+      var rankDiff = res.layer[e.to] - res.layer[e.from];
+      var rowDiff = byId.get(e.to).layer - byId.get(e.from).layer;
+      if (rankDiff >= 0 && rankDiff <= 1 && rowDiff > rankDiff) e.span = true;
     });
+
+    if (meta) {
+      meta.components = res.components;
+      meta.compOf = res.compOf;
+      meta.compEdges = res.compEdges;
+      meta.compRank = res.compRank;
+    }
 
     var flat = [];
     layers.forEach(function (list) {
@@ -821,11 +952,11 @@
     return edges;
   }
 
-  // layoutPackages puts packages in shortest-import-path layers: a package sits
-  // below everything it imports, at the depth of its first (shortest) import
-  // chain. The scene passes its own edge objects, so a call-only edge
-  // participates in layering and can be marked back on the same object that
-  // drawEdges later renders.
+  // layoutPackages puts packages at their longest import depth: a package sits
+  // below everything it imports, at the deepest chain that reaches it. The scene
+  // passes its own edge objects, so a call-only edge participates in layering
+  // and is classified on the same object that drawEdges later renders; it can
+  // also pass `meta` to receive the condensation.
   function layoutPackages(pkgs, pkgByPath, opts) {
     opts = opts || {};
     var all = !!opts.all;
@@ -833,7 +964,7 @@
     var cards = pkgs.map(function (p) {
       return packageCard(p, { modelPath: modelPath, all: all, selected: opts.selected || "" });
     }).sort(function (a, b) { return cmpID(a.id, b.id); });
-    layoutGraph(cards, opts.edges || packageEdges(pkgs, pkgByPath));
+    layoutGraph(cards, opts.edges || packageEdges(pkgs, pkgByPath), opts.meta);
     return cards;
   }
 
@@ -1020,11 +1151,12 @@
   // layoutTypes is the package-view convenience entry: build its cards and run
   // the same vertical engine buildScene uses. `edges` are the dependency edges
   // of the view (uses/implements/embeds/calls); buildScene passes the complete
-  // list so call edges affect layers when they are shown.
+  // list so call edges affect ranks when they are shown. `opts.meta` receives
+  // the condensation like layoutPackages.
   function layoutTypes(pkg, types, opts) {
     opts = opts || {};
     var cards = packageCards(pkg, types, opts);
-    layoutGraph(cards, opts.edges || []);
+    layoutGraph(cards, opts.edges || [], opts.meta);
     return cards;
   }
 
@@ -1140,11 +1272,13 @@
       });
       // The module view has one selection: the card the reader clicked. It is
       // separate from the route, which only changes on a double-click.
+      var meta = {};
       var nodes = layoutPackages(pkgs, idx.pkgByPath, {
         modelPath: model.path,
         all: all,
         selected: selected,
-        edges: edges
+        edges: edges,
+        meta: meta
       });
       // 3.3: while searching, everything that does not match fades back.
       if (view.query) {
@@ -1156,7 +1290,17 @@
         });
       }
       applyMoved(nodes, view.moved);
-      return { kind: "packages", key: "home", nodes: nodes, edges: edges, pkgs: pkgs, axis: FLOW_AXIS, selected: selected };
+      return {
+        kind: "packages",
+        key: "home",
+        nodes: nodes,
+        edges: edges,
+        pkgs: pkgs,
+        axis: FLOW_AXIS,
+        selected: selected,
+        components: meta.components || [],
+        cycleWarning: cycleWarning(meta.components)
+      };
     }
 
     var pkg;
@@ -1223,7 +1367,8 @@
       tedges = tedges.concat(callEdges(model.calls, pkg, byId));
     }
 
-    layoutGraph(tnodes, tedges);
+    var meta = {};
+    layoutGraph(tnodes, tedges, meta);
 
     if (view.query) {
       var matched = matchTypeIDs(searchHits(model, view.query, all));
@@ -1239,7 +1384,9 @@
       edges: tedges,
       pkg: pkg,
       selected: selectedID,
-      axis: FLOW_AXIS
+      axis: FLOW_AXIS,
+      components: meta.components || [],
+      cycleWarning: cycleWarning(meta.components)
     };
     applyMoved(scene.nodes, view.moved);
     return scene;
@@ -1581,13 +1728,14 @@
   // border at its centreline and enters the target's top border at its
   // centreline. Both control points sit outside the boxes (below the source,
   // above the target), so the tangent approaches the target from outside and
-  // the arrowhead is never painted inside the card. A back edge is the same
-  // port pair pointing up: it is a loop, not a second direction.
+  // the arrowhead is never painted inside the card. A cycle edge is the same
+  // port pair pointing up when wrapping put its target on an earlier row: it
+  // is a loop, not a second direction.
   //
-  // There is no axis argument and no horizontal fallback, even though a
-  // shortest-path cross edge may join two cards at the same layer or point up:
-  // the ports stay bottom/top and the curve simply bends back. Adding an axis
-  // or a side port would recreate the two-direction bug.
+  // There is no axis argument and no horizontal fallback, even though a cycle
+  // edge or a wrapped span edge may point sideways or up: the ports stay
+  // bottom/top and the curve simply bends. Adding an axis or a side port would
+  // recreate the two-direction bug.
   function edgeRoute(a, b) {
     var sx = a.x + a.w / 2, sy = a.y + a.h;
     var ex = b.x + b.w / 2, ey = b.y;
@@ -1682,7 +1830,10 @@
     layoutPackages: layoutPackages,
     layoutTypes: layoutTypes,
     layoutGraph: layoutGraph,
+    condense: condense,
     rankTypes: rankTypes,
+    cyclicComponents: cyclicComponents,
+    cycleWarning: cycleWarning,
     typeRows: typeRows,
     typePairs: typePairs,
     callEdges: callEdges,

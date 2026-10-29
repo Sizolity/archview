@@ -52,6 +52,7 @@
   #status { color: var(--muted); font-size: 12px; white-space: nowrap; flex: 0 0 auto; }
   .warnings { padding: 6px 14px; font-size: 12px; color: #92400e; background: #fffbeb;
     border-bottom: 1px solid #fde68a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .warnings.cycles { color: #991b1b; background: #fef2f2; border-bottom-color: #fecaca; }
   main { display: flex; height: calc(100vh - 56px); }
   #canvas {
     position: relative;
@@ -117,7 +118,6 @@
   .node.selected .box { stroke: #16a34a; stroke-width: 3; }
   .edge { fill: none; stroke: #94a3b8; stroke-width: 1.4; }
   .edge.ref { stroke: #8b5cf6; stroke-dasharray: 4 3; }
-  .edge.violation { stroke: #dc2626; stroke-width: 1.9; }
   .edge.call { stroke: #0891b2; }
   .edge.call.dynamic { stroke-dasharray: 3 3; }
   .edge.callonly { stroke: #0d9488; stroke-dasharray: 6 3; }
@@ -125,8 +125,13 @@
   .edge.hl { stroke-width: 2.6; }
   .edge.faded { opacity: .18; }
   .edge.emb { stroke: #2563eb; }
-  /* Last, so a back edge stays orange-and-dashed even when it is also a call. */
-  .edge.back { stroke: #d97706; stroke-dasharray: 2 4; }
+  /* A layout-induced cross-row hop: neutral grey, never a cycle. */
+  .edge.span { stroke: #94a3b8; stroke-dasharray: 2 3; }
+  /* A layer violation keeps its red line even when wrapping stretched it. */
+  .edge.violation { stroke: #dc2626; stroke-width: 1.9; }
+  /* Last: a cycle is the strongest fact, red dashed even when it is also a
+     call or a violation. */
+  .edge.cycle { stroke: #dc2626; stroke-dasharray: 2 4; }
   .badge-svg { font-size: 9px; fill: #475569; }
   .crap { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .crap.ok { background: #dcfce7; color: #166534; }
@@ -178,6 +183,7 @@
   </div>
 </header>
 <div id="warnings" class="warnings" hidden></div>
+<div id="cyclewarn" class="warnings cycles" hidden></div>
 
 <main>
   <section id="canvas">
@@ -198,7 +204,9 @@
         <span class="ln" style="border-top-color:#0891b2" title="静态调用;虚线为接口调用"></span><small>调用</small>
         <span class="ln" style="border-top-color:#dc2626;border-top-width:3px" title="分层违规:下层依赖上层"></span><small>违规</small></div>
       <div><b>跨包</b> <span class="ln" style="border-top-color:#0d9488;border-top-style:dashed" title="跨包调用,且两包之间没有同向 import"></span><small>跨包调用(无 import)</small></div>
-      <div><b>回边</b> <span class="ln" style="border-top-color:#d97706;border-top-style:dashed" title="不向下跨层的边:环路边,或同层/反向的跨层边"></span><small>环/跨层边</small></div>
+      <div><b>环 / 跨行</b>
+        <span class="ln" style="border-top-color:#94a3b8;border-top-style:dashed" title="wrapRows 把同一/相邻层拆成多行造成的跨行边,不是环"></span><small>跨行(换行)</small>
+        <span class="ln" style="border-top-color:#dc2626;border-top-style:dashed" title="强连通分量内部的边:依赖图上真的存在环"></span><small>环(强连通)</small></div>
     </div>  </section>
   <aside id="side"></aside>
 </main>
@@ -300,6 +308,23 @@
     }
   }
 
+  // renderCycleWarning shows the scene's SCC line: a graph with a cycle says so
+  // before the reader traces lines. It is one deterministic line built in
+  // ui.js (A.cycleWarning via buildScene) and is hidden again on a DAG.
+  function renderCycleWarning(scene) {
+    var box = document.getElementById("cyclewarn");
+    if (!box) return;
+    var text = scene && scene.cycleWarning;
+    if (!text) {
+      box.hidden = true;
+      box.textContent = "";
+      return;
+    }
+    box.hidden = false;
+    box.textContent = "⚠ " + text;
+    box.title = text;
+  }
+
   // ---------- routing ----------
 
   function go(hash) {
@@ -336,12 +361,14 @@
     { id: "arrow-call", fill: "#0891b2" },
     { id: "arrow-callonly", fill: "#0d9488" },
     { id: "arrow-violation", fill: "#dc2626" },
-    { id: "arrow-back", fill: "#d97706" }
+    { id: "arrow-span", fill: "#94a3b8" },
+    { id: "arrow-cycle", fill: "#dc2626" }
   ];
 
   function markerFor(e) {
-    if (e.back) return "arrow-back";
+    if (e.cycle) return "arrow-cycle";
     if (e.violation) return "arrow-violation";
+    if (e.span) return "arrow-span";
     if (e.callOnly) return "arrow-callonly";
     if (e.call) return "arrow-call";
     if (e.kind === "implements") return "arrow-impl";
@@ -355,13 +382,14 @@
 
   function edgeClass(e) {
     var cls = "edge";
-    if (e.back) cls += " back";
     if (e.ref) cls += " ref";
     if (e.kind === "implements") cls += " impl";
     if (e.kind === "embeds") cls += " emb";
     if (e.callOnly) cls += " callonly";
     if (e.call) cls += " call" + (e.dynamic ? " dynamic" : "");
+    if (e.span) cls += " span";
     if (e.violation) cls += " violation";
+    if (e.cycle) cls += " cycle";
     return cls;
   }
 
@@ -378,8 +406,8 @@
 
   // drawEdges routes every scene edge from its two cards. Every route leaves a
   // bottom centre and enters a top centre; the port decision lives in
-  // A.edgePath, not here. A back edge keeps that same port pair and is marked
-  // by the .back class and its own arrow colour.
+  // A.edgePath, not here. A cycle or span edge keeps that same port pair and is
+  // marked by its class and its own arrow colour.
   function drawEdges(scene, cards, world) {
     edgeEls = [];
     scene.edges.forEach(function (e) {
@@ -395,7 +423,8 @@
       if (!e.ref) {
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on. A callOnly edge names the absent import.
-        var lead = e.back ? "回边(环/跨层): " : (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : ""));
+        var lead = e.cycle ? "环(强连通): " : (e.span ? "跨行(换行): " :
+          (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " : "")));
         p.appendChild(svgEl("title", {}, lead + e.from + " → " + e.to));
       }
       world.appendChild(p);
@@ -601,6 +630,7 @@
     state.scene = scene;
     draw(scene);
     renderSide(scene);
+    renderCycleWarning(scene);
     updateChrome();
     if (state.sceneKey !== scene.key) {
       state.sceneKey = scene.key;
@@ -615,7 +645,7 @@
       "拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码 · 自上而下" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
-      " · 橙色虚线 = 回边/跨层 · 箭头指向被依赖方 · ▾ 折叠成员";
+      " · 灰色虚线 = 换行造成的跨行 · 红色虚线 = 环(强连通) · 箭头指向被依赖方 · ▾ 折叠成员";
   }
 
   // ---------- binding ----------
