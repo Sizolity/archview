@@ -46,9 +46,21 @@ patch release, not three.
 tag's version before goreleaser runs, and fails the release when it is missing:
 the changelog cannot drift from what was published.
 
+## Releases are approved, not scheduled
+
+A release is a decision the maintainer makes, not a side effect of a merge. No
+tag is cut, no `chore(release)` commit is made and no workflow is dispatched
+without an explicit "release this" instruction in the same conversation. When in
+doubt, leave the change in `## Unreleased`.
+
+Never lower a version: a published tag is immutable in the module proxy, so
+re-tagging an old number makes the proxy and the repository disagree forever.
+
 ## A note on the early history
 
 `v0.1.1`–`v0.1.3` were cut per commit (licence, package docs, tool cleanups),
-and `v0.1.5` shipped a feature but was numbered as a patch. Both are what this
-document exists to prevent. The rules apply from `v0.2.0` onward; published tags
-are never moved.
+`v0.1.5` shipped a feature but was numbered as a patch, and `v0.2.0`–`v0.4.0`
+ran ahead of the changes they described. They stay as they are: the proxy has
+cached them, so the numbers cannot be reused or lowered, and rewriting history
+would only make the tags lie. Treat them as an exploratory line and count from
+the next release under the rules above.
