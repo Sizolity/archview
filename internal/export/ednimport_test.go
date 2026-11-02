@@ -113,7 +113,8 @@ func TestImportEDNMapsTheIR(t *testing.T) {
 		t.Fatalf("methods = %+v", book.Methods)
 	}
 
-	want := model.Edge{Kind: model.EdgeImplements, From: "domain#repo", To: "domain#book"}
+	want := model.Edge{Kind: model.EdgeImplements, Class: model.ClassStructural,
+		From: "domain#repo", To: "domain#book"}
 	found := false
 	for _, e := range m.Edges {
 		if e == want {

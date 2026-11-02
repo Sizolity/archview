@@ -18,6 +18,7 @@ flags + archview.json
         ▼
    typeCheck (go/types)               export data from `go list -export -deps`
         ├── relations                  implements / embeds edges
+        ├── references                 uses + value edges (go/types Uses)
         └── calls                      ast.CallExpr + types.Info{Uses, Selections}
         │
         ▼
@@ -42,7 +43,8 @@ change (drill-down, layout mode, focus, search) is client-side.
 | parsing | `internal/model` | `go/parser` with comments; unexported declarations are kept and filtered in the UI |
 | type check | `internal/model` | `go list -e -export -deps` for export data, `importer.ForCompiler` + `types.Config.Check`; a failure is per-package warning, never fatal |
 | relations | `internal/model` | `uses` is syntactic; `implements`/`embeds` come from `go/types` (a type counts if `T` or `*T` satisfies the interface) |
-| calls | `internal/model` | only static targets inside the module; interface calls are marked `dynamic` |
+| references | `internal/model` | `go/types.Info.Uses` over signatures and bodies; a type target is `structural`, a const/var read (and a value declaration's own type) is `data` |
+| calls | `internal/model` | only static targets inside the module; interface calls are marked `dynamic`; class is `call` |
 | metrics | `internal/crap` | one `go-crap scan -f json .` at startup, keyed to functions by `file:line` |
 | workspace | `internal/model` | `go work edit -json` lists modules; results are merged and positions re-rooted |
 | cache | `internal/cache` | fingerprint of every `.go` + `go.mod`/`go.sum`/`go.work` (path, size, mtime) decides whether to rescan |
@@ -59,9 +61,22 @@ change (drill-down, layout mode, focus, search) is client-side.
 | `layers` | `[][]string` | config layers, inner first |
 | `metrics` | object | go-crap summary: `average`, `combined`, `exceeded`, `total_funcs`, `thresholds` |
 | `packages` | array | `path`, `name`, `doc`, `imports`, `types`, `funcs`, `consts`, `vars` |
-| `edges` | array | `{kind, from, to}` with `kind` ∈ `uses`, `implements`, `embeds` |
-| `calls` | array | `{from, to, dynamic}` between function IDs |
+| `edges` | array | `{kind, class, from, to}` with `kind` ∈ `uses`, `implements`, `embeds`, `value` and `class` ∈ `structural`, `data` |
+| `calls` | array | `{from, to, class, dynamic}` between function IDs; `class` is always `call` |
 | `warnings` | array | degraded stages, one line each |
+
+Every relation carries two independent axes. `kind` says how to draw the line;
+`class` says what the relation means. `structural` covers references to a type
+from a type declaration, a method, a function signature or body, plus the
+type-to-type `implements`/`embeds` relations. `data` covers a declaration
+reading a package-level const/var, including a value declaration naming the type
+it belongs to. `call` is the call graph.
+
+Topology consumes `structural` edges only. A const naming its type while a
+method of that type reads the const is a data loop, not an architectural cycle,
+so it cannot join an SCC, move a layer or grow the cycle banner. The UI still
+draws both data and call edges; when one does not advance a layer it is marked
+`span`, the same neutral grey style a wrap-induced hop uses.
 
 IDs are stable strings: a type is `<import path>#<TypeName>`, a function is
 `<import path>#<Func>`, a method is `<import path>#<Type>.<Method>`. Positions

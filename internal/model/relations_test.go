@@ -33,16 +33,16 @@ func TestLoadRelations(t *testing.T) {
 	set := edgeSet(m)
 	for _, want := range []Edge{
 		// Value receiver.
-		{Kind: EdgeImplements, From: "example.com/relmod#S", To: "example.com/relmod#I"},
+		{Kind: EdgeImplements, Class: ClassStructural, From: "example.com/relmod#S", To: "example.com/relmod#I"},
 		// Only *P has the method, but a reader still counts P as satisfying I.
-		{Kind: EdgeImplements, From: "example.com/relmod#P", To: "example.com/relmod#I"},
+		{Kind: EdgeImplements, Class: ClassStructural, From: "example.com/relmod#P", To: "example.com/relmod#I"},
 		// Promotion through the embedded field makes E satisfy I too.
-		{Kind: EdgeImplements, From: "example.com/relmod#E", To: "example.com/relmod#I"},
+		{Kind: EdgeImplements, Class: ClassStructural, From: "example.com/relmod#E", To: "example.com/relmod#I"},
 		// Cross-package relation.
-		{Kind: EdgeImplements, From: "example.com/relmod#S", To: "example.com/relmod/sub#J"},
+		{Kind: EdgeImplements, Class: ClassStructural, From: "example.com/relmod#S", To: "example.com/relmod/sub#J"},
 		// Struct embedding, plus the syntactic uses edge it also produces.
-		{Kind: EdgeEmbeds, From: "example.com/relmod#E", To: "example.com/relmod#S"},
-		{Kind: EdgeUses, From: "example.com/relmod#E", To: "example.com/relmod#S"},
+		{Kind: EdgeEmbeds, Class: ClassStructural, From: "example.com/relmod#E", To: "example.com/relmod#S"},
+		{Kind: EdgeUses, Class: ClassStructural, From: "example.com/relmod#E", To: "example.com/relmod#S"},
 	} {
 		if !set[want] {
 			t.Errorf("缺少边 %+v,实际 %v", want, m.Edges)

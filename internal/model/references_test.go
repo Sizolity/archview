@@ -14,12 +14,12 @@ func TestReferenceEdgesCoverValuesAndTypes(t *testing.T) {
 
 	const pkg = "example.com/values"
 	want := []Edge{
-		{Kind: EdgeValue, From: pkg + "#v", To: pkg + "#k"},
-		{Kind: EdgeValue, From: pkg + "#f", To: pkg + "#k"},
-		{Kind: EdgeValue, From: pkg + "#f", To: pkg + "#v"},
-		{Kind: EdgeUses, From: pkg + "#f", To: pkg + "#T"},
-		{Kind: EdgeUses, From: pkg + "#g", To: pkg + "#T"},
-		{Kind: EdgeValue, From: pkg + "#T.m", To: pkg + "#k"},
+		{Kind: EdgeValue, Class: ClassData, From: pkg + "#v", To: pkg + "#k"},
+		{Kind: EdgeValue, Class: ClassData, From: pkg + "#f", To: pkg + "#k"},
+		{Kind: EdgeValue, Class: ClassData, From: pkg + "#f", To: pkg + "#v"},
+		{Kind: EdgeUses, Class: ClassStructural, From: pkg + "#f", To: pkg + "#T"},
+		{Kind: EdgeUses, Class: ClassStructural, From: pkg + "#g", To: pkg + "#T"},
+		{Kind: EdgeValue, Class: ClassData, From: pkg + "#T.m", To: pkg + "#k"},
 	}
 	set := edgeSet(m)
 	for _, w := range want {

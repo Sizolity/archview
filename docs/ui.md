@@ -22,19 +22,47 @@ that a structural property of the scene.
   `n.layer` is the drawn row after wrapping (`n.layer >= n.rank`). For every
   edge that is neither `cycle` nor `span`, `rank(to) > rank(from)` and
   `layer(to) > layer(from)`.
+- Topology reads structural edges only. Every drawn edge carries a semantic
+  `class`: `structural`, `data` or `call`. `condense`, `rankTypes` and the cycle
+  warning drop everything except `structural`; data and call edges are still
+  drawn.
 - A rank wider than `ROW_MAX_W` may span several consecutive rows, but all of
   its rows stay between the same neighbouring ranks.
+
+## Edge meaning: structural, data, call
+
+`kind` and `class` are independent. `kind` stays the drawing axis (`uses`,
+`implements`, `embeds`, `value`); `class` is the semantic axis:
+
+| `class` | What it means | Topology? |
+| --- | --- | --- |
+| `structural` | a reference to a type from a type declaration, method, function signature or body; type-to-type `implements`/`embeds`; a package import; a field reference | yes |
+| `data` | a declaration reading a package-level const/var, and a const/var naming the type it belongs to | never |
+| `call` | one edge of the call graph | never |
+
+An edge without a `class` is treated as a legacy structural edge, so old
+callers of `condense`/`rankTypes` keep the old meaning. The class is set where
+the edge is built: `typePairs` and package imports are structural, a model
+`uses` edge keeps the model's class (a value declaration's type reference is
+data), `value` is data, and `callEdges` is call. The bug this separation fixes
+is a typed constant: `Error → Severity` (the const's type) and
+`Severity.String → Error` (the method reading the const) are one data loop, not
+an architectural cycle.
 
 ## Layout algorithm
 
 `buildScene` builds the cards and the complete edge list first, then calls
-`layoutGraph(nodes, edges, meta)`. The engine has three steps.
+`layoutGraph(nodes, edges, meta)`. The engine has three steps; every edge
+already carries its semantic class, and only structural edges reach the
+condensation.
 
 ### 1. Condense, then take the longest path
 
-`condense` (public, and the basis of `rankTypes`) works on the drawn edge list:
+`condense` (public, and the basis of `rankTypes`) works on the structural
+subset of the drawn edge list:
 
-1. Deduplicate directed pairs and drop self-loops from the adjacency.
+1. Drop `data` and `call` edges, deduplicate directed pairs and drop self-loops
+   from the adjacency.
 2. Run Tarjan's strongly connected components algorithm. Roots are visited in
    declaration-id order and neighbours in edge order, so the component list is
    deterministic. It returns `components` (one array of card IDs per SCC),
@@ -90,32 +118,37 @@ gap, and a 40px margin. We use `GAP_Y = 120`, the compact end of the requested
 `layoutGraph` flattens the cards back into `scene.nodes` in draw order and
 writes `x`, `y`, `rank`, `layer` onto each card.
 
-## Three edge classes
+## Three layout marks
 
-Classification happens after the rows exist, on the scene's own edge objects.
-The classes are disjoint: an edge carries `cycle`, `span`, or neither.
+These marks are the layout layer on top of the semantic class. Classification
+happens after the rows exist, on the scene's own edge objects. The marks are
+disjoint: an edge carries `cycle`, `span`, or neither.
 
-| Class | Field | Condition | Style |
+| Mark | Field | Condition | Style |
 | --- | --- | --- | --- |
-| normal dependency | neither field | Endpoints in different components; the edge descends at least one rank | The kind's existing stroke and colour: `uses` violet (dashed reference), `implements` green, `embeds` blue, call cyan, package dependency grey, violation red |
-| layout span | `span: true` | Endpoints are in the same or adjacent condensation rank, but `wrapRows` put them more rows apart than the rank difference (`layer(to) - layer(from) > rank(to) - rank(from)`) | Neutral grey dashed (`edge span`, marker `arrow-span`) |
-| cycle | `cycle: true` | Both endpoints are in one SCC of two or more cards | Red dashed (`edge cycle`, marker `arrow-cycle`) |
+| normal dependency | neither field | A structural edge whose endpoints are in different components and which descends at least one rank and one row; also a data/call edge that descends a full rank and row | The kind's existing stroke and colour: `uses` violet (dashed reference), `implements` green, `embeds` blue, call cyan, package dependency grey, violation red |
+| layout span | `span: true` | A structural edge whose same/adjacent-rank hop `wrapRows` stretched over extra rows (`layer(to) - layer(from) > rank(to) - rank(from)`), **or** a data/call edge that does not advance a layer (`rank(to) <= rank(from)`, or it stays on its row, or a one-rank hop is wrap-stretched) | Neutral grey dashed (`edge span`, marker `arrow-span`) |
+| cycle | `cycle: true` | Both endpoints are in one **structural** SCC of two or more cards | Red dashed (`edge cycle`, marker `arrow-cycle`) |
 
 The page labels normal edges `依赖` / `uses` / `implements` / `embeds` / `调用`,
-spans `跨行(换行)` and cycles `环(强连通)` in the card help. The old `back` flag
+spans `跨行/未推进` and cycles `环(强连通)` in the card help. The old `back` flag
 mixed cycle-closing edges with shortest-path cross edges and is deleted, not
 kept beside the new classes.
 
-Span is strictly layout-induced: with no wrapping, every rank is one row, so
-`layer(to) - layer(from) === rank(to) - rank(from)` and no span can be
-produced. A cycle is never a span, even when wrapping splits its members across
-rows.
+Span has two causes now. A structural span is still the extra distance a wrap
+introduced: with no wrapping, every structural rank is one row, so
+`layer(to) - layer(from) === rank(to) - rank(from)` and the edge is normal. A
+data or call span is the semantic limit instead: the edge is drawn, but because
+it does not advance a layer it cannot be a dependency, so it gets the neutral
+style rather than a fake cycle or a banner. A data/call edge that really
+descends a rank keeps its kind style. A cycle is never a span, even when
+wrapping splits its members across rows.
 
 ### Cycles are surfaced
 
-`buildScene` sets `scene.components` (all SCCs, member-sorted) and
-`scene.cycleWarning`. When at least one component has two or more cards, the
-warning is one deterministic line:
+`buildScene` sets `scene.components` (all structural SCCs, member-sorted) and
+`scene.cycleWarning`. When at least one structural component has two or more
+cards, the warning is one deterministic line:
 
 ```
 环(强连通): a ⇄ b
@@ -133,16 +166,18 @@ model warnings; the string itself is built in pure `ui.js` and needs no DOM.
 | `scene.nodes[i].rank` | Integer longest-path rank over the condensation. Every card of one SCC shares it. |
 | `scene.nodes[i].layer` | Integer drawn row in draw order. `rank <= layer`; a rank split by `wrapRows` occupies several consecutive rows. All cards in one row share the same `y`. |
 | `scene.nodes` | Ordered by row, then by the in-row barycenter order (declaration ID breaks ties), so drawing and folding see a deterministic order. |
-| `scene.edges[i].cycle` | Present and `true` exactly when both endpoints are in one SCC of two or more cards; absent otherwise. |
-| `scene.edges[i].span` | Present and `true` when wrapping, not topology, separates the endpoints by extra rows; absent otherwise. |
-| `scene.components` | One sorted array of card IDs per SCC. Every card has exactly one component. |
+| `scene.edges[i].class` | `structural`, `data` or `call`; the semantic axis. Only structural edges enter the condensation. |
+| `scene.edges[i].cycle` | Present and `true` exactly when the edge is structural and both endpoints are in one structural SCC of two or more cards; absent otherwise. |
+| `scene.edges[i].span` | Present and `true` when the edge does not advance a layer: a wrap-stretched structural hop, or a data/call edge that stays on its rank or points back up; absent otherwise. |
+| `scene.components` | One sorted array of card IDs per structural SCC. Every card has exactly one component. |
 | `scene.cycleWarning` | The `环(强连通): …` line, or `null` when the scene is a DAG of single-card SCCs. |
 | `scene.axis` | Always `"v"`; there is no other value and no option that sets it. |
 | `scene.nodes[i].w` / `h` | Variable, derived from text and rows instead of a fixed `CARD_W`/row height. |
 
 The public `condense(nodes, edges)` returns `{components, compOf, compEdges,
-compRank}` for callers that need the SCC tables without a scene. `rankTypes`
-returns the per-card rank map.
+compRank}` for callers that need the SCC tables without a scene; it filters the
+input to structural edges, and an edge without a `class` keeps the old
+structural meaning. `rankTypes` returns the per-card rank map.
 
 Removed outright: the old `back` flag and every code path that set it,
 `flowAxis`, `opts.axis` and every axis branch, the `按类型分组` layout mode and
@@ -159,22 +194,25 @@ a second direction back.
 | Depth is the longest path, not a BFS: a diamond keeps D at rank 2, a chain has ranks 0/1/2, and a converging triangle keeps C at 2 (a BFS flattens it to 1) | `depth comes from the longest path over the condensation, not a BFS`; `longest-path ranks keep a converging node at its deepest chain` |
 | A converging node stays at its deepest chain in a scene | `longest-path ranks keep a converging node at its deepest chain` |
 | Every non-cycle, non-span edge goes from a lower rank to a strictly higher rank (and row) | `every non-cycle, non-span edge goes to a strictly deeper rank`; `flow scenes keep cycle, span and normal dependency disjoint` |
-| Cycle edges exist exactly when an SCC has two or more cards, join one component, and share its rank | `cycle edges exist exactly for SCCs of two or more cards`; `a synthetic cycle is one component and every intra-cycle edge is marked cycle` |
-| A wrapped scene produces span edges; an unwrapped one produces none, and span only joins same/adjacent ranks | `span edges are produced only by wrapRows, and only for short hops` |
+| Cycle edges exist exactly when a structural SCC has two or more cards, join one component, and share its rank; data/call edges are never cycles | `cycle edges exist exactly for structural SCCs of two or more cards`; `a synthetic cycle is one component and every intra-cycle edge is marked cycle` |
+| A wrapped scene produces structural span edges; an unwrapped one produces none for structural hops; a data/call edge that does not advance a layer also gets `span` | `structural span edges are produced only by wrapRows, and only for short hops`; `a data edge that goes up is a span, not a cycle` |
+| A typed constant and its type are data, not an SCC: every structural component is one card and there is no banner | `typed constants are data, not a structural cycle or a banner`; `TestTypedConstantsAreDataNotTopology` |
+| Two types that reference each other are one structural SCC of two cards with a deterministic warning | `two types referencing each other are one structural cycle with both edges`; `TestMutualTypeReferencesAreStructural` |
+| `condense`/`rankTypes` ignore data and call classes; an unclassed edge stays structural | `condense and rankTypes ignore data and call classes` |
 | Every scene reports its SCCs and one deterministic cycle line; a DAG has none | `an SCC of two or more cards adds one deterministic warning line to the scene` |
 | The old `back` notion is gone | `the old back classification is gone, not kept beside cycle and span` |
 | A wrapped SCC still routes every cycle edge bottom → top, even when wrapping makes it point up a row | `a cycle that wrapping splits across rows still uses bottom and top ports` |
 | Every edge uses bottom/top border centrelines and ends on the target's top centre (where `marker-end` puts the arrow), cycle and span included | `every edge uses bottom-centre and top-centre ports, with the arrow at the target`; `every edge uses bottom and top ports, including cycle and span edges` |
 | 40+ cards (including unexported functions and values) never overlap | `forty-plus cards lay out without overlaps and grow the canvas` |
 | Each row is one left-packed row with the fixed gap and no empty slot | `each layer is one left-packed row with no empty column slot` |
-| A 40-card scene covers less area than the old centred-column layout (old area hard-coded) | `forty cards fit a smaller canvas than the centred-column layout` |
+| A 40-card scene covers less area than the re-measured reference budget (structural-only ranks changed the box) | `forty cards fit a smaller canvas than the centred-column layout`; `forty-plus cards lay out without overlaps and grow the canvas` |
 | Two layouts of one scene are identical | `laying out the same scene twice produces identical coordinates` |
 | Adding a card does not change an existing card's layer | `adding a card does not change the layer of any existing card` |
 | An unrelated card does not reorder another layer | `adding an unrelated card keeps every other layer's order` |
 | There is no horizontal-axis code path left | `the horizontal-axis option is gone` |
 | A row shares one top coordinate | `layout puts every node of a layer on the layer's top coordinate` |
 | Endpoints sit on a border centreline | `every edge endpoint sits on the centre of a border of the box it connects` |
-| A call between two function cards is layered, not side-routed | `regression: a call between two function cards is layered, not side-routed` |
+| A call edge never ranks a card: it is drawn as a neutral span when it stays on a layer | `regression: a call between two function cards never side-routes` |
 | The arrowhead approaches from outside | `an edge approaches both boxes from outside, so its arrowhead is not buried in a card` |
 | Every card keeps title/sub/href/drill, and every panel keeps its doc | `every card has title, sub, href and the drill target its kind supports`; `every declaration panel renders the doc paragraph` |
 
@@ -183,12 +221,13 @@ a second direction back.
 | Concern | Owner | Contract | Guard |
 | --- | --- | --- | --- |
 | Flow direction | `FLOW_AXIS` / `buildScene` | Constant `"v"` per scene; no option and no branch | `the horizontal-axis option is gone`; `buildScene gives every view the same top-down flow` |
-| Cycles and depth | `condense` / `assignLayers` / `rankTypes` in `ui.js` | Tarjan SCCs; longest path over the condensation; card rank = component rank | condensation, depth, cycle and add-card tests |
-| Edge classes | `layoutGraph` in `ui.js` | Record `cycle` on intra-SCC edges and `span` on wrap-stretched same/adjacent-rank edges; leave normal edges unmarked | cycle, span, non-cycle/non-span and no-back tests |
-| Cycle warning | `cycleWarning` / `buildScene` in `ui.js`; `#cyclewarn` in `ui.html` | One deterministic line for SCCs of two or more cards; `null` on a DAG | `an SCC of two or more cards adds one deterministic warning line to the scene` |
+| Semantic classes | `buildScene` / `typePairs` / `callEdges` in `ui.js`; `refs.go` in `internal/model` | Every edge has `class` ∈ `structural`, `data`, `call`; only structural edges feed topology | class and typed-constant tests |
+| Cycles and depth | `condense` / `assignLayers` / `rankTypes` in `ui.js` | Structural edges only; Tarjan SCCs; longest path over the condensation; card rank = component rank | condensation, depth, cycle and add-card tests |
+| Layout marks | `layoutGraph` in `ui.js` | Record `cycle` on structural intra-SCC edges and `span` on wrap-stretched structural hops or data/call edges that do not advance; leave normal edges unmarked | cycle, span, non-cycle/non-span and no-back tests |
+| Cycle warning | `cycleWarning` / `buildScene` in `ui.js`; `#cyclewarn` in `ui.html` | One deterministic line for structural SCCs of two or more cards; `null` on a DAG | typed-constant, mutual-reference and warning tests |
 | In-row order | `orderLayers` in `ui.js` | Four deterministic x-barycenter passes over all direct neighbours; declaration ID tie-break | determinism and unrelated-layer tests |
 | Boxes and gutters | `packageCards`, `layoutGraph`, `packRows`, `wrapRows`, `placeLayers` in `ui.js` | Fill `x`, `y`, `rank`, `layer`, `w`, `h`; left-packed rows, 40px card gap, 1300px row wrap, fixed 120px row gap; no overlaps | 40-card, row-packing, area, row-coordinate and determinism tests |
-| Card data and size | `buildCard` + `cardWidth` in `ui.js` | Every card has `title`, `sub`, `href`, `drillHref` and a text-derived `w` | card and panel tests |
+| Card data and size | `buildCard` + `cardWidth` in `ui.js` | Every card has `title`, `sub`, `href`, `drillHref` and a text-derived `w`; a value card's sub is `ValueInfo.Text` (`const Error Severity = iota`) or the `valueSub` fallback | card and panel tests; `value cards show the declaration, not just the initialiser` |
 | Edge geometry | `edgeRoute` / `edgePath` in `ui.js` | Two boxes in, bottom-centre → top-centre out, cycle/span included | port, endpoint and outside-approach tests |
 | Edge style | `CARD_STYLE`, `drawNode`, `edgeClass`, `markerFor`, `drawEdges` in `ui.html` | Map a node/edge to SVG; attach no listeners; `cycle` → `.cycle` red dashed, `span` → `.span` grey dashed | smoke click/drill checks; `edge cycle` / `edge span` CSS |
 | Declaration → card | `cardIndex(scene)` in `ui.html` | One map, rebuilt on every draw | smoke click/double-click checks |
@@ -204,6 +243,7 @@ node .tmp/smoke-layers.js
 node .tmp/smoke-focus.js
 node .tmp/smoke-cards.js
 node .tmp/smoke-export.js
+node .tmp/smoke-value.js
 go test ./...
 ```
 

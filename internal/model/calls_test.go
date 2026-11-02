@@ -17,10 +17,10 @@ func TestLoadCalls(t *testing.T) {
 	}
 
 	want := []Call{
-		{From: "example.com/calls#A", To: "example.com/calls#B"},
-		{From: "example.com/calls#B", To: "example.com/calls#C"},
-		{From: "example.com/calls#Dynamic", To: "example.com/calls#I.M", Dynamic: true},
-		{From: "example.com/calls#T.Do", To: "example.com/calls#A"},
+		{From: "example.com/calls#A", To: "example.com/calls#B", Class: ClassCall},
+		{From: "example.com/calls#B", To: "example.com/calls#C", Class: ClassCall},
+		{From: "example.com/calls#Dynamic", To: "example.com/calls#I.M", Class: ClassCall, Dynamic: true},
+		{From: "example.com/calls#T.Do", To: "example.com/calls#A", Class: ClassCall},
 	}
 	got := make(map[Call]bool, len(m.Calls))
 	for _, c := range m.Calls {

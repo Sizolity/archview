@@ -11,9 +11,12 @@ import (
 // Call is one edge of the call graph. Both ends are function IDs in the same
 // form the model uses: "<pkg>#<Func>" or "<pkg>#<Type>.<Method>". Dynamic means
 // the call went through an interface, so the concrete receiver is unknown.
+// Class is always ClassCall: the call graph is its own semantic axis, and the
+// UI keeps it out of topology.
 type Call struct {
 	From    string `json:"from"`
 	To      string `json:"to"`
+	Class   string `json:"class"`
 	Dynamic bool   `json:"dynamic,omitempty"`
 }
 
@@ -44,7 +47,7 @@ func collectCalls(checked map[string]*checkedPackage, scope func(pkgPath string)
 						return true
 					}
 					if pkgPath, ok := funcIDPackage(to); ok && scope(pkgPath) {
-						calls = append(calls, Call{From: from, To: to, Dynamic: dynamic})
+						calls = append(calls, Call{From: from, To: to, Class: ClassCall, Dynamic: dynamic})
 					}
 					return true
 				})
@@ -127,12 +130,19 @@ func funcObjectID(fn *gotypes.Func) (string, bool) {
 	return pkgPath + "#" + named.Obj().Name() + "." + fn.Name(), isIface
 }
 
-// normalizeCalls drops duplicates and sorts, so the JSON is diffable.
+// normalizeCalls drops duplicates and sorts, so the JSON is diffable. Every
+// call carries its class even when an older builder omitted it.
 func normalizeCalls(calls []Call) []Call {
 	seen := make(map[Call]bool, len(calls))
 	out := make([]Call, 0, len(calls))
 	for _, c := range calls {
-		if c.From == "" || c.To == "" || c.From == c.To || seen[c] {
+		if c.From == "" || c.To == "" || c.From == c.To {
+			continue
+		}
+		if c.Class == "" {
+			c.Class = ClassCall
+		}
+		if seen[c] {
 			continue
 		}
 		seen[c] = true

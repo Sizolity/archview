@@ -393,7 +393,9 @@ func readEdges(top map[string]any, m *model.Module, classToType map[string]strin
 			ignored++
 			continue
 		}
-		m.Edges = append(m.Edges, model.Edge{Kind: kind, From: from, To: to})
+		// The IR only carries type-to-type relations, so imported edges are
+		// structural; data and call edges never leave the model this way.
+		m.Edges = append(m.Edges, model.Edge{Kind: kind, Class: model.ClassStructural, From: from, To: to})
 	}
 	return ignored
 }

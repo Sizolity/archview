@@ -217,7 +217,9 @@ test("buildScene draws packages and imports on the home view", () => {
   assert.equal(scene.kind, "packages");
   assert.equal(scene.key, "home");
   assert.equal(scene.nodes.length, 2);
-  assert.deepEqual(scene.edges, [{ from: "example.com/app", to: "example.com/app/store", ref: false }]);
+  assert.deepEqual(scene.edges, [
+    { from: "example.com/app", to: "example.com/app/store", ref: false, class: "structural" }
+  ]);
 });
 
 test("buildScene marks the selected package on the home view", () => {
@@ -243,7 +245,7 @@ test("buildScene draws type cards and reference edges for a package", () => {
   assert.equal(scene.key, "pkg:example.com/app");
   assert.deepEqual(scene.nodes.filter((n) => n.kind === "type").map((n) => n.id).sort(), ["example.com/app#App", "example.com/app#Server"]);
   assert.deepEqual(scene.edges, [
-    { from: "example.com/app#App", to: "example.com/app#Server", ref: true }
+    { from: "example.com/app#App", to: "example.com/app#Server", ref: true, class: "structural" }
   ]);
 });
 
@@ -582,6 +584,12 @@ function condenseInfo(scene) {
   return compOf;
 }
 
+// isStructuralEdge mirrors the semantic axis: an edge without a class is a
+// legacy structural edge, and only structural edges may shape topology.
+function isStructuralEdge(e) {
+  return !e.class || e.class === "structural";
+}
+
 test("condense returns every node's component and an acyclic condensation", () => {
   const p = (name) => "example.com/p#" + name;
   const types = ["A", "B", "C", "D", "E"].map((n) => mkType(n));
@@ -674,12 +682,18 @@ test("depth comes from the longest path over the condensation, not a BFS", () =>
   }
 });
 
-test("cycle edges exist exactly for SCCs of two or more cards", () => {
+test("cycle edges exist exactly for structural SCCs of two or more cards", () => {
   for (const { name, scene } of flowScenes()) {
     const compOf = condenseInfo(scene);
     const big = scene.components.map((m) => m.length >= 2);
     let cycleEdges = 0;
     for (const { e } of drawableEdges(scene)) {
+      // Data and call edges are drawn but are not topology: they can never be
+      // a cycle, even when their endpoints land in one structural SCC.
+      if (!isStructuralEdge(e)) {
+        assert.ok(!e.cycle, `${name}: ${e.from} -> ${e.to} is ${e.class} but marked cycle`);
+        continue;
+      }
       const same = compOf.get(e.from) === compOf.get(e.to) && big[compOf.get(e.from)];
       if (same) {
         assert.equal(e.cycle, true,
@@ -697,7 +711,7 @@ test("cycle edges exist exactly for SCCs of two or more cards", () => {
   }
 });
 
-test("span edges are produced only by wrapRows, and only for short hops", () => {
+test("structural span edges are produced only by wrapRows, and only for short hops", () => {
   const model = compactModel();
   const idx = ui.indexModel(model);
   const wrapped = ui.buildScene(model, idx, { view: "pkg", path: "example.com/fan" }, true, { calls: true });
@@ -707,6 +721,7 @@ test("span edges are produced only by wrapRows, and only for short hops", () => 
   let spans = 0;
   for (const { e, a, b } of drawableEdges(wrapped)) {
     if (!e.span) continue;
+    if (!isStructuralEdge(e)) continue;
     spans++;
     assert.ok(!e.cycle, "an edge cannot be both cycle and span");
     const rankDiff = b.rank - a.rank;
@@ -738,7 +753,12 @@ test("every non-cycle, non-span edge goes to a strictly deeper rank", () => {
       }
       if (e.span) {
         spans++;
-        assert.ok(b.layer > a.layer, `${name}: span edge ${e.from} -> ${e.to} must still point down a row`);
+        // A structural span is a wrap-stretched forward edge and still points
+        // down. A data/call span may stay on its layer or point back up.
+        if (isStructuralEdge(e)) {
+          assert.ok(b.layer > a.layer,
+            `${name}: structural span edge ${e.from} -> ${e.to} must still point down a row`);
+        }
         continue;
       }
       assert.ok(b.rank > a.rank,
@@ -774,6 +794,126 @@ test("an SCC of two or more cards adds one deterministic warning line to the sce
   const flat = ui.buildScene(flatModel, flatIdx, { view: "pkg", path: "example.com/big" }, true, { calls: true });
   assert.ok(flat.components.every((c) => c.length === 1), "the big fixture has no SCC of two cards");
   assert.equal(flat.cycleWarning, null, "no cycle line when every SCC is a single card");
+});
+
+test("typed constants are data, not a structural cycle or a banner", () => {
+  const model = severityModel();
+  const idx = ui.indexModel(model);
+  const p = "example.com/severity";
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: p }, true, { calls: true });
+
+  assert.equal(scene.cycleWarning, null, "a const and its type must not grow a cycle banner");
+  assert.equal(scene.edges.some((e) => e.cycle), false, "no data edge may be marked cycle");
+
+  // Structural-only condensation: every card is its own SCC, and the two cards
+  // the old banner joined are separate.
+  assert.ok(scene.components.length > 0);
+  assert.ok(scene.components.every((c) => c.length === 1), JSON.stringify(scene.components));
+  const compOf = condenseInfo(scene);
+  assert.notEqual(compOf.get(p + "#Error"), compOf.get(p + "#Severity"));
+
+  // Both relations survive as data edges and are still drawn.
+  const data = scene.edges
+    .filter((e) => e.class === "data")
+    .map((e) => e.from + ">" + e.to)
+    .sort();
+  assert.deepEqual(data, [
+    p + "#Error>" + p + "#Severity",
+    p + "#Severity>" + p + "#Error"
+  ]);
+  // Neither advances a layer, so both are neutral spans, never cycles.
+  for (const e of scene.edges) {
+    assert.equal(e.class, "data");
+    assert.equal(e.span, true, `${e.from} -> ${e.to} must be a span`);
+    assert.equal(e.cycle, undefined);
+  }
+
+  // The card shows the declaration, not "var Severity = iota".
+  const card = scene.nodes.find((n) => n.title === "Error");
+  assert.equal(card.sub, "const Error Severity = iota");
+});
+
+test("two types referencing each other are one structural cycle with both edges", () => {
+  const model = mutualModel();
+  const idx = ui.indexModel(model);
+  const p = "example.com/mutual";
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: p }, true, { calls: true });
+
+  assert.equal(scene.components.length, 1);
+  assert.deepEqual(scene.components[0].slice().sort(), [p + "#A", p + "#B"]);
+  assert.match(scene.cycleWarning, /环\(强连通\)/);
+  for (const name of ["A", "B"]) {
+    assert.ok(scene.cycleWarning.includes(name), "the warning must list " + name);
+  }
+
+  const cycles = scene.edges.filter((e) => e.cycle);
+  assert.equal(cycles.length, 2, "both directions of the cycle must be marked");
+  assert.deepEqual(cycles.map((e) => e.from + ">" + e.to).sort(), [
+    p + "#A>" + p + "#B",
+    p + "#B>" + p + "#A"
+  ]);
+  for (const e of cycles) assert.equal(e.class, "structural");
+});
+
+test("a data edge that goes up is a span, not a cycle", () => {
+  const p = "example.com/up";
+  const model = {
+    path: p,
+    packages: [{
+      path: p, name: "up", imports: [],
+      types: [
+        {
+          id: p + "#Wrapper", name: "Wrapper", kind: "struct", exported: true, pos: "up.go:6",
+          fields: [{ name: "s", type: "Severity", exported: false, refs: [p + "#Severity"] }], methods: []
+        },
+        {
+          id: p + "#Severity", name: "Severity", kind: "type", exported: true, pos: "up.go:9",
+          fields: [], methods: [{ id: p + "#Severity.String", name: "String", sig: "() string", exported: true }]
+        }
+      ],
+      funcs: [],
+      consts: [{ id: p + "#Error", name: "Error", kind: "const", type: "Severity", value: "iota", exported: true, pos: "up.go:12" }],
+      vars: []
+    }],
+    edges: [
+      { kind: "uses", class: "data", from: p + "#Error", to: p + "#Severity" },
+      { kind: "value", class: "data", from: p + "#Severity.String", to: p + "#Error" }
+    ]
+  };
+  const idx = ui.indexModel(model);
+  const scene = ui.buildScene(model, idx, { view: "pkg", path: p }, true, { calls: true });
+  const byId = new Map(scene.nodes.map((n) => [n.id, n]));
+  const wrapper = byId.get(p + "#Wrapper");
+  const severity = byId.get(p + "#Severity");
+  assert.ok(severity.rank > wrapper.rank, "the structural field reference must deepen Severity");
+
+  const up = scene.edges.find((e) => e.from === p + "#Severity" && e.to === p + "#Error");
+  assert.ok(up, "Severity.String -> Error must fold onto the Severity card");
+  assert.equal(up.class, "data");
+  assert.equal(up.span, true, "a data edge that points back up is a span");
+  assert.equal(up.cycle, undefined);
+  assert.equal(scene.cycleWarning, null);
+});
+
+test("condense and rankTypes ignore data and call classes", () => {
+  const p = (name) => "example.com/p#" + name;
+  const nodes = [mkType("A"), mkType("B")];
+  const edges = [
+    { from: p("A"), to: p("B"), class: "structural" },
+    { from: p("B"), to: p("A"), class: "data" },
+    { from: p("B"), to: p("A"), class: "call" }
+  ];
+  const c = ui.condense(nodes, edges);
+  assert.equal(c.components.length, 2, "data and call edges must not join an SCC");
+  assert.equal(c.compRank[c.compOf[p("A")]], 0);
+  assert.equal(c.compRank[c.compOf[p("B")]], 1);
+  assert.equal(ui.cycleWarning(c.components), null);
+  assert.deepEqual([ui.rankTypes(nodes, edges)[p("A")], ui.rankTypes(nodes, edges)[p("B")]], [0, 1]);
+
+  // An edge without a class is a legacy structural edge, so old callers keep
+  // working unchanged.
+  const legacy = ui.condense(nodes, [{ from: p("A"), to: p("B") }]);
+  assert.equal(legacy.components.length, 2);
 });
 
 test("the old back classification is gone, not kept beside cycle and span", () => {
@@ -885,8 +1025,8 @@ test("typePairs deduplicates references and skips self-loops", () => {
 
   const pairs = ui.typePairs(appTypes, idx);
   assert.deepEqual(pairs, [
-    { from: "example.com/app#App", to: "example.com/app#Server", ref: true },
-    { from: "example.com/app#Server", to: "example.com/app/store#DB", ref: true }
+    { from: "example.com/app#App", to: "example.com/app#Server", ref: true, class: "structural" },
+    { from: "example.com/app#Server", to: "example.com/app/store#DB", ref: true, class: "structural" }
   ]);
   // The cross-package target is kept: buildScene filters it for drawing.
   assert.equal(pairs.length, 2);
@@ -1266,7 +1406,9 @@ test("value edges keep kind value and drop with a hidden value card", () => {
   assert.equal(shown.nodes.some((n) => n.id === "example.com/app#k"), true);
   const values = shown.edges.filter((e) => e.kind === "value");
   assert.deepEqual(values, [
-    { from: "example.com/app#New", to: "example.com/app#k", kind: "value" }
+    // The function and the const both sit on rank 0, so the data edge is a
+    // neutral span: it is drawn, but it neither ranks nor forms a cycle.
+    { from: "example.com/app#New", to: "example.com/app#k", kind: "value", class: "data", span: true }
   ]);
 });
 
@@ -1274,10 +1416,13 @@ test("value edges have a solid style that loses to cycle", () => {
   const html = fs.readFileSync(path.join(__dirname, "ui.html"), "utf8");
   const base = html.indexOf(".edge {");
   const value = html.indexOf(".edge.value {");
+  const span = html.indexOf(".edge.span {");
   const cycle = html.indexOf(".edge.cycle {");
   assert.ok(base >= 0 && value > base, "value must override the default .edge style");
-  assert.ok(cycle > value, "a cycle must override the value style");
+  assert.ok(span > value, "a data value edge that does not advance must render as the grey span");
+  assert.ok(cycle > span, "a cycle must override the value and span styles");
   assert.match(html, /\.edge\.value\s*\{[^}]*stroke:\s*#[0-9a-f]{6}[^}]*stroke-dasharray:\s*none/i);
+  assert.match(html, /\.edge\.span\s*\{[^}]*stroke-dasharray:\s*2 3/i);
   assert.ok(html.includes("引用常量/变量"), "the legend must explain the value line");
 });
 
@@ -1400,10 +1545,13 @@ test("a package of variables gets value cards and a count", () => {
   const home = ui.buildScene(model, idx, { view: "home" }, false);
   assert.ok(home.nodes[0].rows[0].indexOf("4 变量") >= 0, home.nodes[0].rows[0]);
 });
-test("value cards show the initialiser", () => {
-  assert.equal(ui.valueSub({ type: "[]byte" }), "var []byte");
-  assert.equal(ui.valueSub({ type: "int", value: "2" }), "var int = 2");
-  assert.equal(ui.valueSub({ kind: "const", value: "3" }), "const = 3");
+test("value cards show the declaration, not just the initialiser", () => {
+  assert.equal(ui.valueSub({ name: "UI", type: "[]byte" }), "var UI []byte");
+  assert.equal(ui.valueSub({ name: "Limit", type: "int", value: "2" }), "var Limit int = 2");
+  // The bug report's card used to read "var Severity = iota": the keyword was
+  // wrong and the name was missing.
+  assert.equal(ui.valueSub({ kind: "const", name: "Error", type: "Severity", value: "iota" }),
+    "const Error Severity = iota");
 });
 test("type cards prefer the declaration source, functions prefer the doc", () => {
   assert.equal(ui.docLine("A is a type.\nMore."), "A is a type.");
@@ -1657,16 +1805,17 @@ test("every edge uses bottom and top ports, including cycle and span edges", () 
       const sb = assertBorderCentre(p.end, b, `${name} ${e.from}->${e.to} end`);
       assert.equal(sa, "bottom", `${name}: ${e.from}->${e.to} must leave the bottom (${d})`);
       assert.equal(sb, "top", `${name}: ${e.from}->${e.to} must enter the top (${d})`);
-      // A cycle edge may point across or even up a wrapped row; its style still
-      // owns the same port pair. Every other edge descends a row.
-      if (e.cycle) return;
+      // A cycle edge may point across or even up a wrapped row; a span may too
+      // when a data or call edge does not descend a layer. Their style still
+      // owns the same port pair.
+      if (e.cycle || e.span) return;
       assert.ok(b.layer > a.layer,
         `${name}: ${e.from} (${a.layer}) -> ${e.to} (${b.layer}) must move down a row`);
     });
   }
 });
 
-test("regression: a call between two function cards is layered, not side-routed", () => {
+test("regression: a call between two function cards never side-routes", () => {
   const model = {
     path: "example.com/app",
     calls: [{ from: "example.com/app#Load", to: "example.com/app#LoadWith" }],
@@ -1687,10 +1836,17 @@ test("regression: a call between two function cards is layered, not side-routed"
   const a = byId.get("example.com/app#Load");
   const b = byId.get("example.com/app#LoadWith");
   assert.equal(scene.axis, "v");
-  // The old bug was two called functions in one row. The call edge now ranks
-  // them into different layers, so a horizontal side route cannot occur.
-  assert.ok(b.layer > a.layer, `call target must sit below its caller: ${a.layer} -> ${b.layer}`);
-  assert.ok(b.y > a.y, "the two function cards must not share a row");
+
+  // Topology is structural only: a call between two functions does not create
+  // a layer. It is still drawn, and because it does not advance a layer it is
+  // a span instead of a fake cycle.
+  assert.equal(a.rank, b.rank, "a call must not rank its target");
+  assert.equal(a.layer, b.layer, "a call must not move its target to another row");
+  const call = scene.edges.find((e) => e.call);
+  assert.equal(call.class, "call");
+  assert.equal(call.span, true);
+  assert.equal(call.cycle, undefined);
+  assert.equal(scene.cycleWarning, null);
 
   const p = parseEdgePath(ui.edgePath(a, b));
   const sa = assertBorderCentre(p.start, a, "function call start");
@@ -1698,8 +1854,7 @@ test("regression: a call between two function cards is layered, not side-routed"
   assert.equal(sa, "bottom");
   assert.equal(sb, "top");
   // The arrowhead is drawn at the path end, so the end is the target's top
-  // centre. Compact rows do not promise a vertical tangent: the running order
-  // can place the two cards side by side within their rows.
+  // centre. A span may point sideways or up; the ports stay bottom/top.
   assert.deepEqual(p.end, [b.x + b.w / 2, b.y]);
 });
 
@@ -1913,6 +2068,62 @@ function cycleModel() {
   };
 }
 
+// severityModel is the bug report's typed-constant package: Error names its
+// type and Severity.String reads Error back. Both relations are data.
+function severityModel() {
+  const p = "example.com/severity";
+  const method = p + "#Severity.String";
+  return {
+    path: p,
+    packages: [{
+      path: p, name: "severity", imports: [],
+      types: [{
+        id: p + "#Severity", name: "Severity", kind: "type", exported: true, pos: "severity.go:6",
+        fields: [],
+        methods: [{ id: method, name: "String", sig: "() string", exported: true }]
+      }],
+      funcs: [],
+      consts: [
+        {
+          id: p + "#Error", name: "Error", kind: "const", type: "Severity", value: "iota",
+          text: "const Error Severity = iota", pos: "severity.go:9", exported: true
+        },
+        { id: p + "#Warn", name: "Warn", kind: "const", text: "const Warn", pos: "severity.go:10", exported: true },
+        { id: p + "#Info", name: "Info", kind: "const", text: "const Info", pos: "severity.go:11", exported: true }
+      ],
+      vars: []
+    }],
+    edges: [
+      { kind: "uses", class: "data", from: p + "#Error", to: p + "#Severity" },
+      { kind: "value", class: "data", from: method, to: p + "#Error" }
+    ],
+    calls: []
+  };
+}
+
+// mutualModel is the contrast fixture: two structs whose fields reference each
+// other, which is a genuine structural cycle.
+function mutualModel() {
+  const p = "example.com/mutual";
+  const field = (name, to) => ({ name, type: to, exported: false, refs: [p + "#" + to] });
+  return {
+    path: p,
+    packages: [{
+      path: p, name: "mutual", imports: [],
+      types: [
+        { id: p + "#A", name: "A", kind: "struct", exported: true, pos: "mutual.go:6", fields: [field("b", "B")], methods: [] },
+        { id: p + "#B", name: "B", kind: "struct", exported: true, pos: "mutual.go:9", fields: [field("a", "A")], methods: [] }
+      ],
+      funcs: [], consts: [], vars: []
+    }],
+    edges: [
+      { kind: "uses", class: "structural", from: p + "#A", to: p + "#B" },
+      { kind: "uses", class: "structural", from: p + "#B", to: p + "#A" }
+    ],
+    calls: []
+  };
+}
+
 // drawableEdges joins a scene's edges to the two cards they connect.
 function drawableEdges(scene) {
   const byId = new Map(scene.nodes.map((n) => [n.id, n]));
@@ -1970,8 +2181,13 @@ test("flow scenes keep cycle, span and normal dependency disjoint", () => {
       }
       if (e.span) {
         spans++;
-        assert.ok(b.layer > a.layer,
-          `${name}: span edge ${e.from} -> ${e.to} must still point down a row`);
+        // A structural span is a wrap-stretched forward edge and still points
+        // down. A data/call span is neutral grey precisely because it may stay
+        // on its layer or point back up.
+        if (isStructuralEdge(e)) {
+          assert.ok(b.layer > a.layer,
+            `${name}: structural span edge ${e.from} -> ${e.to} must still point down a row`);
+        }
         continue;
       }
       assert.ok(b.rank > a.rank,
@@ -2042,13 +2258,15 @@ test("forty-plus cards lay out without overlaps and grow the canvas", () => {
   const width = Math.max(...all.nodes.map((n) => n.x + n.w)) - Math.min(...all.nodes.map((n) => n.x));
   const height = Math.max(...all.nodes.map((n) => n.y + n.h)) - Math.min(...all.nodes.map((n) => n.y));
   assert.ok(width > 0 && height > 0, "canvas must have positive bounds, got " + width + "x" + height);
-  // Measured with the centred-column + adaptive-gutter layout that preceded
-  // this change (ui.js at the previous commit): 1602 x 3655 = 5,855,310 px^2
-  // for this same all=true scene. The row packer must stay smaller.
-  const OLD_AREA = 5855310;
-  assert.ok(width * height < OLD_AREA,
+  // Topology is structural-only now, so the 12 called functions no longer
+  // occupy a call chain: they collect on rank 0 and the box trades width
+  // (1602 -> 1160) for rows (3655 -> 5107). The reference was re-measured on
+  // this scene: 1160 x 5107 = 5,924,120 px^2. A regression back to columns or
+  // an accidental extra rank still blows past the margin.
+  const REFERENCE_AREA = 6200000;
+  assert.ok(width * height < REFERENCE_AREA,
     `42 cards cover ${Math.round(width)}x${Math.round(height)} = ${Math.round(width * height)} px^2, ` +
-    `not less than the old ${OLD_AREA} px^2`);
+    `not less than the reference ${REFERENCE_AREA} px^2`);
 });
 
 test("each layer is one left-packed row with no empty column slot", () => {

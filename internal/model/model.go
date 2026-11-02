@@ -120,12 +120,15 @@ type FuncInfo struct {
 }
 
 // ValueInfo is a constant or variable. ID is "<import path>#<Name>", the same
-// shape a card and a reference edge use.
+// shape a card and a reference edge use. Kind is "const" or "var"; Text is the
+// declaration the card shows ("const Error Severity = iota").
 type ValueInfo struct {
 	ID       string `json:"id,omitempty"`
 	Name     string `json:"name"`
+	Kind     string `json:"kind,omitempty"`
 	Type     string `json:"type,omitempty"`
 	Value    string `json:"value,omitempty"`
+	Text     string `json:"text,omitempty"`
 	Doc      string `json:"doc,omitempty"`
 	Pos      string `json:"pos,omitempty"`
 	Exported bool   `json:"exported"`
@@ -446,16 +449,31 @@ func (b *builder) parseFile(f *ast.File) {
 						continue
 					}
 					doc := firstPara(commentText(firstNonNil(vs.Doc, dd.Doc)))
+					keyword := "var"
+					if dd.Tok == token.CONST {
+						keyword = "const"
+					}
 					tv := ""
 					if vs.Type != nil {
 						tv = gotypes.ExprString(vs.Type)
 					}
 					val := ""
-					if len(vs.Values) > 0 && dd.Tok == token.CONST {
+					if len(vs.Values) > 0 {
 						val = exprText(b.fset, vs.Values[0])
 					}
 					for _, nm := range vs.Names {
-						v := &ValueInfo{ID: valueID(b.pkgPath, nm.Name), Name: nm.Name, Type: tv, Value: val, Doc: doc,
+						// The card shows the declaration, not just the value: a
+						// const used to read "var Severity = iota" because the
+						// kind and the name were missing.
+						text := keyword + " " + nm.Name
+						if tv != "" {
+							text += " " + tv
+						}
+						if val != "" {
+							text += " = " + val
+						}
+						v := &ValueInfo{ID: valueID(b.pkgPath, nm.Name), Name: nm.Name, Kind: keyword,
+							Type: tv, Value: val, Text: text, Doc: doc,
 							Pos: b.pos(nm.Pos()), Exported: nm.IsExported()}
 						if dd.Tok == token.CONST {
 							b.rootDoc.Consts = append(b.rootDoc.Consts, v)

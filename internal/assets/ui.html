@@ -125,11 +125,13 @@
   .edge.hl { stroke-width: 2.6; }
   .edge.faded { opacity: .18; }
   .edge.emb { stroke: #2563eb; }
-  /* A layout-induced cross-row hop: neutral grey, never a cycle. */
-  .edge.span { stroke: #94a3b8; stroke-dasharray: 2 3; }
   /* A reference to a package-level const/var. Solid and distinct from a type
-     reference; a cycle below still overrides it. */
+     reference; a span below still overrides it, because a data edge that does
+     not advance a layer is drawn neutral. */
   .edge.value { stroke: #b45309; stroke-dasharray: none; }
+  /* A layout-induced cross-row hop or a data/call edge that does not advance a
+     layer: neutral grey, never a cycle. After .value so it owns the look. */
+  .edge.span { stroke: #94a3b8; stroke-dasharray: 2 3; }
   /* A layer violation keeps its red line even when wrapping stretched it. */
   .edge.violation { stroke: #dc2626; stroke-width: 1.9; }
   /* Last: a cycle is the strongest fact, red dashed even when it is also a
@@ -209,8 +211,8 @@
         <span class="ln" style="border-top-color:#dc2626;border-top-width:3px" title="分层违规:下层依赖上层"></span><small>违规</small></div>
       <div><b>跨包</b> <span class="ln" style="border-top-color:#0d9488;border-top-style:dashed" title="跨包调用,且两包之间没有同向 import"></span><small>跨包调用(无 import)</small></div>
       <div><b>环 / 跨行</b>
-        <span class="ln" style="border-top-color:#94a3b8;border-top-style:dashed" title="wrapRows 把同一/相邻层拆成多行造成的跨行边,不是环"></span><small>跨行(换行)</small>
-        <span class="ln" style="border-top-color:#dc2626;border-top-style:dashed" title="强连通分量内部的边:依赖图上真的存在环"></span><small>环(强连通)</small></div>
+        <span class="ln" style="border-top-color:#94a3b8;border-top-style:dashed" title="边没有推进一层:wrapRows 换行造成的跨行,或 data/call 边停在同层/回指;不是环"></span><small>跨行/未推进</small>
+        <span class="ln" style="border-top-color:#dc2626;border-top-style:dashed" title="强连通分量内部的边:结构依赖图上真的存在环"></span><small>环(强连通)</small></div>
     </div>  </section>
   <aside id="side"></aside>
 </main>
@@ -373,8 +375,10 @@
   function markerFor(e) {
     if (e.cycle) return "arrow-cycle";
     if (e.violation) return "arrow-violation";
-    if (e.kind === "value") return "arrow-value";
+    // A data edge that does not advance a layer is a span, so the neutral
+    // marker wins over the amber value marker.
     if (e.span) return "arrow-span";
+    if (e.kind === "value") return "arrow-value";
     if (e.callOnly) return "arrow-callonly";
     if (e.call) return "arrow-call";
     if (e.kind === "implements") return "arrow-impl";
@@ -430,7 +434,7 @@
       if (!e.ref) {
         // A native tooltip: the arrow leaves the dependent and points at the
         // thing it depends on. A callOnly edge names the absent import.
-        var lead = e.cycle ? "环(强连通): " : (e.span ? "跨行(换行): " :
+        var lead = e.cycle ? "环(强连通): " : (e.span ? "未推进一层: " :
           (e.violation ? "违规依赖: " : (e.callOnly ? "跨包调用(无 import): " :
             (e.kind === "value" ? "引用常量/变量: " : ""))));
         p.appendChild(svgEl("title", {}, lead + e.from + " → " + e.to));
@@ -653,7 +657,7 @@
       "拖拽平移 · 滚轮缩放 · 单击选中 · 双击进入/查看源码 · 自上而下" +
       (state.model.layers && state.model.layers.length ? " · 红线 = 内层依赖外层" : "") +
       (state.calls ? " · 蓝线 = 调用" : "") +
-      " · 灰色虚线 = 换行造成的跨行 · 红色虚线 = 环(强连通) · 箭头指向被依赖方 · ▾ 折叠成员";
+      " · 灰色虚线 = 未推进一层(换行或 data/call 边) · 红色虚线 = 环(强连通) · 箭头指向被依赖方 · ▾ 折叠成员";
   }
 
   // ---------- binding ----------

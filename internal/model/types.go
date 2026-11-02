@@ -26,14 +26,42 @@ const (
 	EdgeValue = "value"
 )
 
+// Edge classes are the semantic axis: the kind still says how to draw a line,
+// while the class says whether topology may use the relation at all.
+//
+// Structural edges describe architecture: references to a type from a type
+// declaration, a method, a function signature or body, plus type-to-type
+// relations (implements, embeds). Data edges connect a declaration to a
+// package-level const or var, including a value declaration naming its own
+// type. Call edges are the call graph.
+//
+// Condensation, ranks and the cycle warning consume structural edges only: a
+// const naming its type while a method of that type reads the const is a data
+// loop, not an architectural cycle.
+const (
+	ClassStructural = "structural"
+	ClassData       = "data"
+	ClassCall       = "call"
+)
+
 // Edge is an explicit relation between two declarations of the model. Both
 // ends are "<import path>#<Name>" IDs: a type, a "<Type>.<Method>" method, a
 // package-level function or a const/var. Edges from a function/method body are
 // function IDs, while the UI folds a method onto its owner type card.
 type Edge struct {
-	Kind string `json:"kind"`
-	From string `json:"from"`
-	To   string `json:"to"`
+	Kind  string `json:"kind"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Class string `json:"class"`
+}
+
+// classForKind is the default when an edge builder does not name one. Value
+// relations are data; every other model edge is structural.
+func classForKind(kind string) string {
+	if kind == EdgeValue {
+		return ClassData
+	}
+	return ClassStructural
 }
 
 // exportIndex maps an import path to the export data file that `go list
@@ -151,7 +179,7 @@ func relations(checked map[string]*gotypes.Package, known map[string]bool) []Edg
 			}
 			iface := nodes[ifaceID].Underlying().(*gotypes.Interface)
 			if satisfies(named, iface) {
-				edges = append(edges, Edge{Kind: EdgeImplements, From: fromID, To: ifaceID})
+				edges = append(edges, Edge{Kind: EdgeImplements, Class: ClassStructural, From: fromID, To: ifaceID})
 			}
 		}
 	}
@@ -166,7 +194,7 @@ func relations(checked map[string]*gotypes.Package, known map[string]bool) []Edg
 				continue
 			}
 			if to, ok := moduleNamed(st.Field(i).Type(), nodes); ok && to != id {
-				edges = append(edges, Edge{Kind: EdgeEmbeds, From: id, To: to})
+				edges = append(edges, Edge{Kind: EdgeEmbeds, Class: ClassStructural, From: id, To: to})
 			}
 		}
 	}
@@ -233,11 +261,12 @@ func moduleNamed(t gotypes.Type, nodes map[string]*gotypes.Named) (string, bool)
 	return id, true
 }
 
-// useEdges turns a resolved reference list into uses edges.
+// useEdges turns a resolved reference list into uses edges. The references come
+// from type declarations, fields and signatures, so they are structural.
 func useEdges(from string, refs []string) []Edge {
 	out := make([]Edge, 0, len(refs))
 	for _, ref := range refs {
-		out = append(out, Edge{Kind: EdgeUses, From: from, To: ref})
+		out = append(out, Edge{Kind: EdgeUses, Class: ClassStructural, From: from, To: ref})
 	}
 	return out
 }
@@ -254,12 +283,19 @@ func modelIDs(pkgs []*Package) map[string]bool {
 }
 
 // NormalizeEdges drops self-loops and duplicates and sorts the list, so the
-// JSON is diffable and the layout is reproducible.
+// JSON is diffable and the layout is reproducible. Every surviving edge carries
+// a class: an older builder that forgot one falls back to its kind's class.
 func NormalizeEdges(edges []Edge) []Edge {
 	seen := make(map[Edge]bool, len(edges))
 	out := make([]Edge, 0, len(edges))
 	for _, e := range edges {
-		if e.From == "" || e.To == "" || e.From == e.To || seen[e] {
+		if e.From == "" || e.To == "" || e.From == e.To {
+			continue
+		}
+		if e.Class == "" {
+			e.Class = classForKind(e.Kind)
+		}
+		if seen[e] {
 			continue
 		}
 		seen[e] = true
@@ -268,6 +304,9 @@ func NormalizeEdges(edges []Edge) []Edge {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
+		}
+		if out[i].Class != out[j].Class {
+			return out[i].Class < out[j].Class
 		}
 		if out[i].From != out[j].From {
 			return out[i].From < out[j].From

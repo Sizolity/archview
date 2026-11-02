@@ -32,7 +32,7 @@ func referenceEdges(checked map[string]*checkedPackage, pkgs []*Package) []Edge 
 					if !known[from] {
 						continue
 					}
-					edges = append(edges, declEdges(cp.info, known, from, d.Type, d.Body)...)
+					edges = append(edges, declEdges(cp.info, known, from, false, d.Type, d.Body)...)
 				}
 			}
 		}
@@ -55,7 +55,7 @@ func valueOrTypeEdges(path string, info *gotypes.Info, known map[string]bool, d 
 			if !known[from] {
 				continue
 			}
-			edges = append(edges, declEdges(info, known, from, ts.Type)...)
+			edges = append(edges, declEdges(info, known, from, false, ts.Type)...)
 		}
 	case token.CONST, token.VAR:
 		for _, spec := range d.Specs {
@@ -75,7 +75,10 @@ func valueOrTypeEdges(path string, info *gotypes.Info, known map[string]bool, d 
 				for _, value := range vs.Values {
 					nodes = append(nodes, value)
 				}
-				edges = append(edges, declEdges(info, known, from, nodes...)...)
+				// Everything a value declaration names is data, including the
+				// type it is declared with: a constant belongs to its type
+				// rather than depending on it architecturally.
+				edges = append(edges, declEdges(info, known, from, true, nodes...)...)
 			}
 		}
 	}
@@ -83,9 +86,11 @@ func valueOrTypeEdges(path string, info *gotypes.Info, known map[string]bool, d 
 }
 
 // declEdges resolves every identifier under nodes to a package-level model
-// declaration. from is the declaration that mentions them; the returned edges
-// are already deduplicated and never point at from itself.
-func declEdges(info *gotypes.Info, known map[string]bool, from string, nodes ...ast.Node) []Edge {
+// declaration. from is the declaration that mentions them; fromValue marks a
+// const/var declaration, whose relations are data even when the target is a
+// type. The returned edges are already deduplicated and never point at from
+// itself.
+func declEdges(info *gotypes.Info, known map[string]bool, from string, fromValue bool, nodes ...ast.Node) []Edge {
 	seen := map[Edge]bool{}
 	var edges []Edge
 	add := func(obj gotypes.Object) {
@@ -93,7 +98,11 @@ func declEdges(info *gotypes.Info, known map[string]bool, from string, nodes ...
 		if !ok || id == from {
 			return
 		}
-		edge := Edge{Kind: kind, From: from, To: id}
+		class := ClassStructural
+		if fromValue || kind == EdgeValue {
+			class = ClassData
+		}
+		edge := Edge{Kind: kind, From: from, To: id, Class: class}
 		if seen[edge] {
 			return
 		}

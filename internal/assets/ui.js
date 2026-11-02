@@ -467,7 +467,7 @@
         node.href = funcHash(id);
         node.crap = decl.metrics ? decl.metrics.crap : null;
       } else {
-        node.sub = docLine(decl.doc) || valueSub(decl);
+        node.sub = docLine(decl.doc) || decl.text || valueSub(decl);
         node.href = valueHash(id);
       }
       node.changed = !!decl.changed;
@@ -505,10 +505,13 @@
   //      placeLayers stacks the rows with a fixed rank gap. There is no column
   //      model and no centring.
   //
-  // After placement every edge carries one of three classes: `cycle` (its two
-  // cards are in the same SCC), `span` (a same/adjacent-rank hop that wrapping
-  // stretched over extra rows) or neither (a normal dependency). The old
-  // "back" flag mixed the first and second meaning and is gone.
+  // After placement every edge carries one of three layout classes: `cycle` (a
+  // structural edge whose two cards are in the same SCC), `span` (any edge that
+  // does not advance a layer: a wrap-stretched structural hop, or a data/call
+  // edge that stays on its rank or points back up) or neither (a normal
+  // dependency). Only structural edges enter the condensation; data and call
+  // edges are drawn but never produce a cycle or a banner. The old "back" flag
+  // mixed the first and second meaning and is gone.
   //
   // The reference layout (unclebob/uml-viewer, engine/layout.clj) uses the same
   // shape: class-gap 40 inside a rank, class-rank-gap 140 between ranks, margin
@@ -536,11 +539,40 @@
 
   function pairKey(from, to) { return from + "\u0000" + to; }
 
+  // Every scene edge carries one semantic class:
+  //   structural  references to a type from a type/method/function, and
+  //               type-to-type relations (uses, implements, embeds, imports);
+  //   data        a declaration reading a package-level const/var, including
+  //               a const/var naming the type it belongs to;
+  //   call        the call graph.
+  // Only structural edges may shape topology (condensation, ranks, the cycle
+  // warning). Data and call edges are still drawn. An edge without a class is
+  // a legacy structural edge, so older callers keep the old meaning.
+  var EDGE_STRUCTURAL = "structural";
+  var EDGE_DATA = "data";
+  var EDGE_CALL = "call";
+
+  function edgeClass(e) {
+    return (e && e.class) || EDGE_STRUCTURAL;
+  }
+
+  function isStructuralEdge(e) {
+    return edgeClass(e) === EDGE_STRUCTURAL;
+  }
+
+  // structuralEdges is the topology input. It is the one place the rule lives,
+  // so condense, assignLayers, rankTypes and the cycle warning cannot drift.
+  function structuralEdges(edges) {
+    return (edges || []).filter(isStructuralEdge);
+  }
+
   // condense implements Tarjan's strongly connected components over the drawn
-  // dependency graph. It is deterministic: roots are visited in declaration-id
-  // order and neighbours in edge order (deduplicated by first occurrence), so
-  // two runs over the same scene produce the same components in the same
-  // order. Self-loops are ignored for the adjacency and never become a
+  // structural dependency graph. Data and call edges are ignored: they are
+  // drawn, but a const naming its type while a method reads it is not an
+  // architectural cycle. It is deterministic: roots are visited in
+  // declaration-id order and neighbours in edge order (deduplicated by first
+  // occurrence), so two runs over the same scene produce the same components in
+  // the same order. Self-loops are ignored for the adjacency and never become a
   // component edge.
   //
   // It returns:
@@ -554,6 +586,7 @@
   //
   // The component order is Tarjan's discovery order; ranks do not depend on it.
   function condense(nodes, edges) {
+    var topology = structuralEdges(edges);
     var inSet = Object.create(null);
     var ids = [];
     (nodes || []).forEach(function (n) {
@@ -568,7 +601,7 @@
     var out = Object.create(null);
     ordered.forEach(function (id) { out[id] = []; });
     var seen = Object.create(null);
-    (edges || []).forEach(function (e) {
+    topology.forEach(function (e) {
       if (e.from === e.to || !inSet[e.from] || !inSet[e.to]) return;
       var k = pairKey(e.from, e.to);
       if (seen[k]) return;
@@ -631,7 +664,7 @@
     // stay inside one SCC (a self-loop at component level).
     var compEdges = [];
     var seenComp = Object.create(null);
-    (edges || []).forEach(function (e) {
+    topology.forEach(function (e) {
       if (e.from === e.to || !inSet[e.from] || !inSet[e.to]) return;
       var from = compOf[e.from];
       var to = compOf[e.to];
@@ -677,9 +710,9 @@
     };
   }
 
-  // assignLayers turns the condensation into a per-node rank. All members of a
-  // component share its longest-path rank; layoutGraph later keeps that rank on
-  // n.rank while n.layer becomes the drawn row after wrapping.
+  // assignLayers turns the structural condensation into a per-node rank. All
+  // members of a component share its longest-path rank; layoutGraph later keeps
+  // that rank on n.rank while n.layer becomes the drawn row after wrapping.
   function assignLayers(nodes, edges) {
     var res = condense(nodes, edges);
     var layer = Object.create(null);
@@ -697,8 +730,8 @@
   }
 
   // rankTypes is the public view of the rank step: per-node longest-path rank
-  // over the condensation. Cycle and span marking stays on the scene's own edge
-  // objects in layoutGraph.
+  // over the structural condensation. Cycle and span marking stays on the
+  // scene's own edge objects in layoutGraph.
   function rankTypes(nodes, edges) {
     return assignLayers(nodes, edges).layer;
   }
@@ -847,6 +880,10 @@
   // rewrites nodes into draw order (row, then in-row order), and fills `meta`
   // (when given) with the condensation buildScene reports to the page.
   //
+  // Topology (the condensation and therefore ranks and the cycle warning) is
+  // built from structural edges only; data and call edges stay in `usable` for
+  // drawing and ordering.
+  //
   // n.rank is the card's topological depth: every card of one SCC shares it.
   // n.layer is the drawn row after wrapRows, so it is always >= n.rank. A card
   // that wraps to a later row keeps its rank; only its geometric row moves.
@@ -856,7 +893,7 @@
     var usable = (edges || []).filter(function (e) {
       return byId.has(e.from) && byId.has(e.to);
     });
-    var res = assignLayers(nodes, usable);
+    var res = assignLayers(nodes, structuralEdges(usable));
 
     // Barycenter input: every real relation, including intra-SCC edges, so a
     // cycle's members are ordered next to each other. Parallel edges count once
@@ -900,26 +937,34 @@
     orderLayers(layers, pred, succ);
     placeLayers(layers);
 
-    // Three classes, recorded on the scene's own edge objects:
-    //   cycle  both ends are in one SCC of two or more cards. Red dashed; the
-    //          edge stays a cycle however the rows are packed.
-    //   span   a same-rank or adjacent-rank hop that wrapRows stretched over
-    //          extra rows (rank difference 0/1, row difference greater). The
-    //          extra distance is layout, not topology, so it is neutral grey.
-    //   normal neither: its endpoints are in different components and the edge
-    //          descends at least one rank and one row.
+    // Marks are recorded on the scene's own edge objects:
+    //   cycle  a structural edge whose two ends are in one SCC of two or more
+    //          cards. Red dashed; the edge stays a cycle however the rows are
+    //          packed. Data and call edges never get this mark.
+    //   span   any edge that does not advance a layer. A structural edge gets
+    //          it when wrapRows stretched a same/adjacent-rank hop over extra
+    //          rows (rank difference 0/1, row difference greater). A data or
+    //          call edge gets it whenever it stays on its rank or points back
+    //          up: the graph draws it, but it cannot shape topology, so the
+    //          neutral grey span is the honest style.
+    //   normal neither: a structural edge whose endpoints are in different
+    //          components and which descends at least one rank and one row.
     usable.forEach(function (e) {
       delete e.cycle;
       delete e.span;
       if (e.from === e.to) return;
+      var rankDiff = res.layer[e.to] - res.layer[e.from];
+      var rowDiff = byId.get(e.to).layer - byId.get(e.from).layer;
+      if (!isStructuralEdge(e)) {
+        if (rankDiff <= 0 || rowDiff <= 0 || (rankDiff === 1 && rowDiff > 1)) e.span = true;
+        return;
+      }
       var from = res.compOf[e.from];
       var to = res.compOf[e.to];
       if (from === to) {
         if (res.components[from].length >= 2) e.cycle = true;
         return;
       }
-      var rankDiff = res.layer[e.to] - res.layer[e.from];
-      var rowDiff = byId.get(e.to).layer - byId.get(e.from).layer;
       if (rankDiff >= 0 && rankDiff <= 1 && rowDiff > rankDiff) e.span = true;
     });
 
@@ -952,11 +997,12 @@
     return edges;
   }
 
-  // layoutPackages puts packages at their longest import depth: a package sits
-  // below everything it imports, at the deepest chain that reaches it. The scene
-  // passes its own edge objects, so a call-only edge participates in layering
-  // and is classified on the same object that drawEdges later renders; it can
-  // also pass `meta` to receive the condensation.
+  // layoutPackages puts packages at their longest structural import depth: a
+  // package sits below everything it imports, at the deepest chain that reaches
+  // it. Call-only edges are passed in so drawEdges can render them, but they do
+  // not shape the layers; when they do not descend they become spans. The scene
+  // passes its own edge objects, so the mark and the line live on the same
+  // object, and `meta` receives the condensation.
   function layoutPackages(pkgs, pkgByPath, opts) {
     opts = opts || {};
     var all = !!opts.all;
@@ -1035,10 +1081,13 @@
     return Number(v).toFixed(1);
   }
 
-  // valueSub is the second line of a value card: the kind, the type and the
-  // initialiser when the source gives one.
+  // valueSub is the second line of a value card when the model has no printed
+  // Text: the keyword, the name, the type and the initialiser. A constant used
+  // to lose its kind and name here, so "const Error Severity = iota" rendered
+  // as "var Severity = iota".
   function valueSub(v) {
     var parts = [v.kind || "var"];
+    if (v.name) parts.push(v.name);
     if (v.type) parts.push(v.type);
     if (v.value) parts.push("= " + v.value);
     return parts.join(" ");
@@ -1150,9 +1199,9 @@
 
   // layoutTypes is the package-view convenience entry: build its cards and run
   // the same vertical engine buildScene uses. `edges` are the dependency edges
-  // of the view (uses/implements/embeds/calls); buildScene passes the complete
-  // list so call edges affect ranks when they are shown. `opts.meta` receives
-  // the condensation like layoutPackages.
+  // of the view (uses/implements/embeds/calls); only structural edges shape the
+  // ranks, while data and call edges are drawn as spans when they stay on a
+  // layer. `opts.meta` receives the condensation like layoutPackages.
   function layoutTypes(pkg, types, opts) {
     opts = opts || {};
     var cards = packageCards(pkg, types, opts);
@@ -1173,7 +1222,7 @@
           var k = t.id + ">" + r;
           if (seen[k]) return;
           seen[k] = true;
-          out.push({ from: t.id, to: r, ref: true });
+          out.push({ from: t.id, to: r, ref: true, class: EDGE_STRUCTURAL });
         });
       });
     });
@@ -1215,7 +1264,7 @@
       var k = from + ">" + to;
       var edge = index[k];
       if (!edge) {
-        edge = index[k] = { from: from, to: to, ref: false, call: true, dynamic: true };
+        edge = index[k] = { from: from, to: to, ref: false, call: true, class: EDGE_CALL, dynamic: true };
         out.push(edge);
       }
       if (!c.dynamic) edge.dynamic = false;
@@ -1238,15 +1287,15 @@
       var pkgs = model.packages.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
       var selected = view.selected || "";
       if (selected && !idx.pkgByPath.has(selected)) selected = "";
-      // Edges first: layering consumes exactly the edges that drawEdges draws,
-      // including the cross-package call-only edges.
+      // Edges first: layering consumes the structural imports; the call-only
+      // edges in the opposite direction are drawn but never shape topology.
       var edges = [];
       pkgs.forEach(function (p) {
         (p.imports || []).forEach(function (imp) {
           if (!idx.pkgByPath.has(imp)) return;
           // One direction everywhere: the arrow leaves the dependent and points
           // at what it depends on.
-          var edge = { from: p.path, to: imp, ref: false };
+          var edge = { from: p.path, to: imp, ref: false, class: EDGE_STRUCTURAL };
           if (layerViolation(model.layers, model.path, p.path, imp)) edge.violation = true;
           edges.push(edge);
         });
@@ -1268,7 +1317,7 @@
         var k = from + ">" + to;
         if (imported[k] || callPairs[k]) return;
         callPairs[k] = true;
-        edges.push({ from: from, to: to, ref: false, callOnly: true });
+        edges.push({ from: from, to: to, ref: false, callOnly: true, class: EDGE_CALL });
       });
       // The module view has one selection: the card the reader clicked. It is
       // separate from the route, which only changes on a double-click.
@@ -1332,8 +1381,9 @@
       ? route.id
       : null;
 
-    // Cards and the complete edge list are built before layout: a call edge
-    // included in the scene must also shape the layers when it is shown.
+    // Cards and the complete edge list are built before layout: the structural
+    // edges (uses/implements/embeds) shape the layers, while data and call edges
+    // are drawn on the same page but never enter the condensation.
     var tnodes = packageCards(pkg, types, {
       expanded: view.expanded,
       all: all,
@@ -1364,10 +1414,11 @@
       var to = edgeCardID(e.to);
       if (!from || !to || from === to) return;
       var style = e.kind || (e.ref ? "ref" : "");
-      var key = from + "\u0000" + to + "\u0000" + style;
+      var cls = e.class || (e.kind === "value" ? EDGE_DATA : EDGE_STRUCTURAL);
+      var key = from + "\u0000" + to + "\u0000" + style + "\u0000" + cls;
       if (edgeSeen[key]) return;
       edgeSeen[key] = true;
-      var edge = { from: from, to: to };
+      var edge = { from: from, to: to, class: cls };
       if (e.kind) edge.kind = e.kind;
       if (e.ref !== undefined) edge.ref = e.ref;
       tedges.push(edge);
@@ -1383,11 +1434,11 @@
     // edge.
     (model.edges || []).forEach(function (e) {
       if (e.kind === "uses") {
-        addSceneEdge({ from: e.from, to: e.to, ref: true });
+        addSceneEdge({ from: e.from, to: e.to, ref: true, class: e.class });
         return;
       }
       if (e.kind !== "implements" && e.kind !== "embeds" && e.kind !== "value") return;
-      addSceneEdge({ from: e.from, to: e.to, kind: e.kind });
+      addSceneEdge({ from: e.from, to: e.to, kind: e.kind, class: e.class });
     });
 
     // Call edges stay at declaration level: a package-level function has its
@@ -1702,11 +1753,11 @@
     });
   }
 
-  // panelValue is the inspector for a constant or variable. ValueInfo has no
-  // kind of its own, so the slice it came from decides the badge.
+  // panelValue is the inspector for a constant or variable. ValueInfo carries
+  // its own kind; the owning slice is only the fallback for an older model.
   function panelValue(v, pkg, ctx) {
     var model = ctx.model;
-    var isConst = (pkg.consts || []).indexOf(v) >= 0;
+    var isConst = v.kind ? v.kind === "const" : (pkg.consts || []).indexOf(v) >= 0;
     var body = "<h3>声明</h3><table><tbody>";
     body += '<tr><td class="name">类型</td><td><code class="sig">' + esc(v.type || "—") + "</code></td></tr>";
     body += '<tr><td class="name">值</td><td><code class="sig">' + esc(v.value || "—") + "</code></td></tr>";
@@ -1860,6 +1911,8 @@
     layoutPackages: layoutPackages,
     layoutTypes: layoutTypes,
     layoutGraph: layoutGraph,
+    edgeClass: edgeClass,
+    isStructuralEdge: isStructuralEdge,
     condense: condense,
     rankTypes: rankTypes,
     cyclicComponents: cyclicComponents,
